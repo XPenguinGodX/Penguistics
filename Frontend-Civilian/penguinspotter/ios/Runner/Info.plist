@@ -66,5 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>This app needs access to your location to show your area on the map and tag road reports.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>This app needs access to your camera to take photos of road damage.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app needs access to your photo library to attach photos of road damage.</string>
 </dict>
 </plist>

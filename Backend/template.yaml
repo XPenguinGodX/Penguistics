@@ -1,0 +1,627 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Penguistics city report and managment system
+
+Parameters:
+  UploadBucketName:
+    Type: String
+    Default: firstpenguinbucket
+    Description: Existing S3 bucket in this stack's region for report images
+  DBUsername:
+    Type: String
+    Default: postgres
+    Description: Master username for the RDS PostgreSQL database (RDS generates the password in Secrets Manager)
+  ModelKey:
+    Type: String
+    Default: PenguinThirdEyeMkI.onnx
+    Description: S3 key (in UploadBucketName) of the ONNX model exported by tools/export_model.py
+  ConfidenceThreshold:
+    Type: String
+    Default: '0.35'
+    Description: Minimum model confidence (0-1) for a report to be CONFIRMED (0.35 confirmed 40/40 sampled validation potholes)
+  ValidClasses:
+    Type: String
+    Default: ''
+    Description: Comma-separated model class names that count as road damage (empty = every class)
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures:
+      - x86_64
+    Timeout: 15
+    MemorySize: 256
+    LoggingConfig:
+      LogFormat: JSON
+
+Resources:
+  PenguisticsApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - POST
+          - GET
+          - PUT
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+      Auth:
+        Authorizers:
+          UploadUserAuthorizer:
+            IdentitySource: '$request.header.Authorization'
+            JwtConfiguration:
+              issuer: !Sub 'https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${UserPool}'
+              audience:
+                - !Ref UserPoolClient
+
+  GetUploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: scripts/
+      Handler: get_upload.handler
+      Environment:
+        Variables:
+          UPLOAD_BUCKET: !Ref UploadBucketName
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub 'arn:${AWS::Partition}:s3:::${UploadBucketName}/PenguinAlbum/Potholes/*'
+      Events:
+        GetUploadUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PenguisticsApi
+            Path: /upload
+            Method: GET
+            Auth:
+              Authorizer: UploadUserAuthorizer
+
+  CancelSignupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: api/
+      Handler: cancel_signup.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref UserPool
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminGetUser
+                - cognito-idp:AdminDeleteUser
+              Resource: !GetAtt UserPool.Arn
+      Events:
+        CancelSignup:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PenguisticsApi
+            Path: /signup/cancel
+            Method: POST
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: api/
+      Handler: health.handler
+      Events:
+        HealthCheck:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PenguisticsApi
+            Path: /health
+            Method: GET
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${AWS::StackName}-user-pool'
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+      Schema:
+        - Name: signup_cancel_hash
+          AttributeDataType: String
+          Mutable: false
+          Required: false
+          StringAttributeConstraints:
+            MinLength: '64'
+            MaxLength: '64'
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        - Name: given_name
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        - Name: family_name
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub '${AWS::StackName}-user-pool-client'
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ReadAttributes:
+        - email
+        - email_verified
+        - given_name
+        - family_name
+      WriteAttributes:
+        - email
+        - given_name
+        - family_name
+        - custom:signup_cancel_hash
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+  # ---------- Private network: nothing here has a route to or from the internet ----------
+
+  PrivateVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-private'
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PrivateVpc
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PrivateVpc
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PrivateVpc
+
+  PrivateSubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Lambdas that are allowed to reach the database
+      VpcId: !Ref PrivateVpc
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL access only from the stack Lambdas
+      VpcId: !Ref PrivateVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTPS from the stack Lambdas to private AWS service endpoints
+      VpcId: !Ref PrivateVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  # Lambdas in the VPC have no internet, so AWS APIs are reached through private endpoints
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref PrivateVpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref PrivateVpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      # One subnet keeps the hourly endpoint cost to a single AZ
+      SubnetIds:
+        - !Ref PrivateSubnetA
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  LambdaEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref PrivateVpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.lambda'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnetA
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for the Penguistics database
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  PostgresDatabase:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-postgres'
+      DBName: penguistics
+      Engine: postgres
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      StorageEncrypted: true
+      MasterUsername: !Ref DBUsername
+      # RDS generates the password, stores it in Secrets Manager, and rotates it
+      ManageMasterUserPassword: true
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt DBSecurityGroup.GroupId
+      BackupRetentionPeriod: 0
+      DeleteAutomatedBackups: true
+
+  DatabaseInitFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: database.init_db.handler
+      Timeout: 30
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt PostgresDatabase.Endpoint.Address
+          DB_PORT: !GetAtt PostgresDatabase.Endpoint.Port
+          DB_NAME: penguistics
+          DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+
+  DatabaseInitializer:
+    Type: Custom::DatabaseInitializer
+    # The init Lambda needs the secret endpoint, and the S3 route to answer CloudFormation
+    DependsOn:
+      - PostgresDatabase
+      - SecretsManagerEndpoint
+      - S3GatewayEndpoint
+    Properties:
+      ServiceToken: !GetAtt DatabaseInitFunction.Arn
+      # Bump this whenever InitialScheme.sql changes so CloudFormation reruns it
+      SchemaVersion: '2'
+
+  ReportCleanupFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - DatabaseInitializer
+    Properties:
+      CodeUri: .
+      Handler: jobs.cleanup_reports.handler
+      Timeout: 60
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt PostgresDatabase.Endpoint.Address
+          DB_PORT: !GetAtt PostgresDatabase.Endpoint.Port
+          DB_NAME: penguistics
+          DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+          UPLOAD_BUCKET: !Ref UploadBucketName
+          VALIDATOR_FUNCTION_NAME: !Ref ValidateImageFunction
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+        - Statement:
+            - Effect: Allow
+              Action: s3:DeleteObject
+              Resource: !Sub 'arn:${AWS::Partition}:s3:::${UploadBucketName}/PenguinAlbum/Potholes/*'
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ValidateImageFunction
+      Events:
+        DailyCleanup:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 day)
+
+  InferenceLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      ContentUri: layers/inference/
+      CompatibleRuntimes:
+        - python3.12
+    Metadata:
+      BuildMethod: python3.12
+
+  ValidateImageFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - DatabaseInitializer
+    Properties:
+      CodeUri: .
+      Handler: scripts.validate_image.handler
+      Timeout: 120
+      MemorySize: 2048
+      Layers:
+        - !Ref InferenceLayer
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt PostgresDatabase.Endpoint.Address
+          DB_PORT: !GetAtt PostgresDatabase.Endpoint.Port
+          DB_NAME: penguistics
+          DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+          UPLOAD_BUCKET: !Ref UploadBucketName
+          MODEL_KEY: !Ref ModelKey
+          CONFIDENCE_THRESHOLD: !Ref ConfidenceThreshold
+          VALID_CLASSES: !Ref ValidClasses
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+        - Statement:
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:s3:::${UploadBucketName}/PenguinAlbum/Potholes/*'
+                - !Sub 'arn:${AWS::Partition}:s3:::${UploadBucketName}/${ModelKey}'
+            # Lets S3 answer "NoSuchKey" for a missing photo instead of "AccessDenied"
+            - Effect: Allow
+              Action: s3:ListBucket
+              Resource: !Sub 'arn:${AWS::Partition}:s3:::${UploadBucketName}'
+
+  ProcessReportFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - DatabaseInitializer
+    Properties:
+      CodeUri: .
+      Handler: scripts.process_report.handler
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt PostgresDatabase.Endpoint.Address
+          DB_PORT: !GetAtt PostgresDatabase.Endpoint.Port
+          DB_NAME: penguistics
+          DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+          VALIDATOR_FUNCTION_NAME: !Ref ValidateImageFunction
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ValidateImageFunction
+      Events:
+        CreateReport:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PenguisticsApi
+            Path: /reports
+            Method: POST
+            Auth:
+              Authorizer: UploadUserAuthorizer
+
+  GetReportFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - DatabaseInitializer
+    Properties:
+      CodeUri: .
+      Handler: scripts.get_report.handler
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt PostgresDatabase.Endpoint.Address
+          DB_PORT: !GetAtt PostgresDatabase.Endpoint.Port
+          DB_NAME: penguistics
+          DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Events:
+        GetReport:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PenguisticsApi
+            Path: /reports/{id}
+            Method: GET
+            Auth:
+              Authorizer: UploadUserAuthorizer
+
+  ListReportsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - DatabaseInitializer
+    Properties:
+      CodeUri: .
+      Handler: scripts.list_reports.handler
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt PostgresDatabase.Endpoint.Address
+          DB_PORT: !GetAtt PostgresDatabase.Endpoint.Port
+          DB_NAME: penguistics
+          DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Events:
+        ListReports:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PenguisticsApi
+            Path: /reports
+            Method: GET
+            Auth:
+              Authorizer: UploadUserAuthorizer
+
+  ProfileFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - DatabaseInitializer
+    Properties:
+      CodeUri: .
+      Handler: scripts.user_profile.handler
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt PostgresDatabase.Endpoint.Address
+          DB_PORT: !GetAtt PostgresDatabase.Endpoint.Port
+          DB_NAME: penguistics
+          DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Events:
+        GetProfile:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PenguisticsApi
+            Path: /profile
+            Method: GET
+            Auth:
+              Authorizer: UploadUserAuthorizer
+        UpdateProfile:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PenguisticsApi
+            Path: /profile
+            Method: PUT
+            Auth:
+              Authorizer: UploadUserAuthorizer
+
+  PostConfirmationFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - DatabaseInitializer
+    Properties:
+      CodeUri: .
+      Handler: models.Users.post_confirmation_handler
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt PostgresDatabase.Endpoint.Address
+          DB_PORT: !GetAtt PostgresDatabase.Endpoint.Port
+          DB_NAME: penguistics
+          DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Events:
+        CognitoPostConfirmation:
+          Type: Cognito
+          Properties:
+            UserPool: !Ref UserPool
+            Trigger: PostConfirmation
+
+Outputs:
+  ApiBaseUrl:
+    Description: Pass this base URL to Flutter with --dart-define=PEN_API=<url>
+    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+  UploadEndpoint:
+    Description: Authenticated GET endpoint that returns a presigned S3 PUT URL
+    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/upload'
+  ReportsEndpoint:
+    Description: Authenticated POST /reports (create) and GET /reports/{id} (poll status)
+    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/reports'
+  SignupCancellationEndpoint:
+    Description: Pass this URL to Flutter with --dart-define=SIGNUP_CANCEL_URL=<url>
+    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/signup/cancel'
+  HealthEndpoint:
+    Description: URL for the GET /health endpoint
+    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/health'
+  UserPoolId:
+    Description: Cognito User Pool ID (for PoolId in amplifyconfiguration.dart)
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Description: Cognito App Client ID (for AppClientId in amplifyconfiguration.dart)
+    Value: !Ref UserPoolClient
+  Region:
+    Description: AWS Region deployed to
+    Value: !Ref AWS::Region
+  PostgresEndpoint:
+    Description: Private RDS PostgreSQL hostname (reachable only from inside the stack's VPC)
+    Value: !GetAtt PostgresDatabase.Endpoint.Address
+  DatabaseSecretArn:
+    Description: Secrets Manager secret holding the RDS-generated master credentials (the ARN, not the password)
+    Value: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn

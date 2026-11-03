@@ -1,5 +1,7 @@
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:penguin/services/auth_session.dart';
+import 'package:penguin/widgets/penguin_widgets.dart';
 
 class Login extends StatefulWidget {
   const Login({super.key});
@@ -9,11 +11,15 @@ class Login extends StatefulWidget {
 }
 
 class _LoginState extends State<Login> {
-
-  
   final TextEditingController username = TextEditingController();
   final TextEditingController password = TextEditingController();
   bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _skipIfSignedIn();
+  }
 
   @override
   void dispose() {
@@ -22,26 +28,20 @@ class _LoginState extends State<Login> {
     super.dispose();
   }
 
-  Future<void> checkLogin() async {
-      try {
-        final currentSession = await Amplify.Auth.fetchAuthSession();
-        if (currentSession.isSignedIn) {
-          await Amplify.Auth.signOut();
-        }
-      } catch (_) {}
+  // Cognito refuses a second sign-in, so an existing session goes straight home
+  Future<void> _skipIfSignedIn() async {
+    if (await isSignedIn() && mounted) {
+      Navigator.pushReplacementNamed(context, '/home');
+    }
+  }
 
+  Future<void> checkLogin() async {
     if (username.text.trim().isEmpty || password.text.isEmpty) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            backgroundColor: Colors.white,
-            content: Text(
-              "All fields must be filled in",
-              style: TextStyle(color: Colors.black, fontSize: 16),
-            ),
-          ),
-        );
+      showPenguinSnack(
+        context,
+        "All fields must be filled in",
+        tone: PenguinTone.warning,
+      );
       return;
     }
 
@@ -56,108 +56,74 @@ class _LoginState extends State<Login> {
       if (mounted) {
         setState(() => _isLoading = false);
         if (result.isSignedIn) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              backgroundColor: Colors.green,
-              content: Text('Logged in successfully!'),
-            ),
+          showPenguinSnack(
+            context,
+            'Logged in successfully!',
+            tone: PenguinTone.success,
           );
           Navigator.pushReplacementNamed(context, '/home');
         } else if (result.nextStep.signInStep == AuthSignInStep.confirmSignUp) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              backgroundColor: Colors.orangeAccent,
-              content: Text('Please verify your email before logging in.'),
-            ),
+          showPenguinSnack(
+            context,
+            'Please verify your email before logging in.',
+            tone: PenguinTone.warning,
           );
         }
       }
     } on AuthException catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.redAccent,
-            content: Text(e.message, style: const TextStyle(color: Colors.white)),
-          ),
-        );
+        showPenguinSnack(context, e.message, tone: PenguinTone.warning);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Center(
-        child: Container(
-          color: Colors.amber,
-          width: 500.0,
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                "Login",
-                style: TextStyle(fontSize: 50, color: Colors.white),
-              ),
-              const SizedBox(height: 20),
-              TextFormField(
-                controller: username,
-                decoration: const InputDecoration(
-                  filled: true,
-                  fillColor: Colors.white,
-                  hintText: "Enter your username or email",
-                  border: OutlineInputBorder(),
-                ),
-                style: const TextStyle(color: Colors.black),
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: password,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  filled: true,
-                  fillColor: Colors.white,
-                  hintText: "Enter your password",
-                  border: OutlineInputBorder(),
-                ),
-                style: const TextStyle(color: Colors.black),
-              ),
-              const SizedBox(height: 20),
-              TextButton(
-                onPressed: _isLoading ? null : checkLogin,
-                style: ButtonStyle(
-                  backgroundColor: WidgetStateProperty.all(Colors.white),
-                  padding: WidgetStateProperty.all(
-                    const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-                  ),
-                ),
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text(
-                        "Submit",
-                        style: TextStyle(color: Colors.black, fontSize: 16),
-                      ),
-              ),
-              const SizedBox(height: 12),
-              TextButton(
-                onPressed: () {
-                  Navigator.pushReplacementNamed(context, '/signup');
-                },
-                child: const Text(
-                  "Create An Account",
-                  style: TextStyle(color: Colors.white),
-                ),
-              )
-            ],
+    return AuthShell(
+      title: "Welcome back",
+      subtitle: "Log in to report road damage in your city.",
+      children: [
+        TextFormField(
+          controller: username,
+          textInputAction: TextInputAction.next,
+          autofillHints: const [AutofillHints.username],
+          decoration: const InputDecoration(
+            labelText: "Username or email",
+            prefixIcon: Icon(Icons.person_outline_rounded),
           ),
         ),
-      ),
+        const SizedBox(height: 14),
+        TextFormField(
+          controller: password,
+          obscureText: true,
+          textInputAction: TextInputAction.done,
+          autofillHints: const [AutofillHints.password],
+          onFieldSubmitted: (_) => _isLoading ? null : checkLogin(),
+          decoration: const InputDecoration(
+            labelText: "Password",
+            prefixIcon: Icon(Icons.lock_outline_rounded),
+          ),
+        ),
+        const SizedBox(height: 24),
+        ElevatedButton(
+          onPressed: _isLoading ? null : checkLogin,
+          child: _isLoading
+              ? const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text("Log In"),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: () {
+            Navigator.pushReplacementNamed(context, '/signup');
+          },
+          child: const Text("New here? Create an account"),
+        ),
+      ],
     );
   }
 }
