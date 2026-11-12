@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:penguin/services/auth_session.dart';
 import 'package:penguin/services/report_service.dart';
 import 'package:penguin/theme/penguin_theme.dart';
+import 'package:penguin/widgets/penguin_map.dart';
 import 'package:penguin/widgets/penguin_menu.dart';
 import 'package:penguin/widgets/penguin_widgets.dart';
 import 'package:penguin/widgets/report_pins.dart';
@@ -165,12 +166,11 @@ class _HomeState extends State<Home> {
             options: MapOptions(
               initialCenter: _currentLocation,
               initialZoom: 13.0,
+              minZoom: penguinMinZoom,
+              maxZoom: penguinMaxZoom,
             ),
             children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.penguin',
-              ),
+              penguinTileLayer(),
               MarkerLayer(
                 markers: [
                   for (final report in _myReports)

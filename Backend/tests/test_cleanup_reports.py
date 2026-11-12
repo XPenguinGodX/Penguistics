@@ -1,6 +1,7 @@
 """Exercise the report cleanup job with fake S3, Lambda, and Report model; never contact AWS."""
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import runpy
 import sys
@@ -21,10 +22,14 @@ class CleanupReportsTests(unittest.TestCase):
     def setUp(self):
         self.s3 = Mock()
         self.s3.delete_objects.return_value = {}
+        self.paginator = Mock()
+        self.paginator.paginate.return_value = []
+        self.s3.get_paginator.return_value = self.paginator
         self.lambda_client = Mock()
         self.Report = Mock()
         self.Report.purge_expired.return_value = []
         self.Report.get_stale_pending.return_value = []
+        self.Report.find_image_paths.return_value = set()
 
         boto3 = types.ModuleType("boto3")
         clients = {"s3": self.s3, "lambda": self.lambda_client}
@@ -90,6 +95,29 @@ class CleanupReportsTests(unittest.TestCase):
         self.lambda_client.invoke.side_effect = [FakeClientError(), None]
         self.assertEqual(self.handler({}, None)["rerun"], 1)
         self.assertEqual(self.lambda_client.invoke.call_count, 2)
+
+    def test_old_images_no_report_points_to_are_deleted(self):
+        now = datetime.now(timezone.utc)
+        self.paginator.paginate.return_value = [{"Contents": [
+            {"Key": "PenguinAlbum/Potholes/orphan.jpg", "LastModified": now - timedelta(days=2)},
+            {"Key": "PenguinAlbum/Potholes/kept.jpg", "LastModified": now - timedelta(days=2)},
+            {"Key": "PenguinAlbum/Potholes/fresh.jpg", "LastModified": now - timedelta(hours=1)},
+        ]}]
+        self.Report.find_image_paths.return_value = {"PenguinAlbum/Potholes/kept.jpg"}
+
+        self.assertEqual(self.handler({}, None)["orphans"], 1)
+
+        self.paginator.paginate.assert_called_once_with(Bucket="test-bucket", Prefix="PenguinAlbum/Potholes/")
+        # A fresh upload may still be on its way to becoming a report, so it is not even checked
+        self.Report.find_image_paths.assert_called_once_with(
+            ["PenguinAlbum/Potholes/orphan.jpg", "PenguinAlbum/Potholes/kept.jpg"])
+        self.assertEqual(self.deleted_keys(), ["PenguinAlbum/Potholes/orphan.jpg"])
+
+    def test_orphan_listing_failure_does_not_stop_pending_reruns(self):
+        self.paginator.paginate.side_effect = FakeClientError()
+        self.Report.get_stale_pending.return_value = [Mock(id="r1", imagepath="PenguinAlbum/Potholes/r1.jpg")]
+        result = self.handler({}, None)
+        self.assertEqual((result["orphans"], result["rerun"]), (0, 1))
 
     def test_reruns_are_skipped_until_validator_is_configured(self):
         with patch.dict(os.environ, {"VALIDATOR_FUNCTION_NAME": ""}):

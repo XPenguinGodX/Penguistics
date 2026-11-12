@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:penguin/pages/location_picker.dart';
 import 'package:penguin/services/auth_session.dart';
 import 'package:penguin/services/image_upload_service.dart';
 import 'package:penguin/services/report_service.dart';
@@ -23,12 +25,27 @@ class _ReportState extends State<Report> {
   final ReportService _reports = ReportService();
   String? _uploadedImageKey;
   String? _reportStatus;
+  // Set after a rejection, so the next submit retries that report instead of adding another
+  String? _rejectedReportId;
 
   XFile? _selectedPhoto;
   bool _isPickingPhoto = false;
+  // Where the phone is (always needed, even for a remote report)
   double? _latitude;
   double? _longitude;
+  // Set when the user placed the pin on the map; null means "use my GPS"
+  LatLng? _remoteLocation;
   bool _isSubmitting = false;
+
+  bool get _isRemote => _remoteLocation != null;
+
+  // On a phone, an on-site report takes a fresh photo. Someone reporting
+  // from elsewhere isn't at the damage, so they pick a photo they took earlier.
+  bool get _usesCamera =>
+      !kIsWeb &&
+      !_isRemote &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   @override
   void initState() {
@@ -57,14 +74,32 @@ class _ReportState extends State<Report> {
     } catch (_) {}
   }
 
-  Future<void> _attachPhoto() async {
-    // Check if running on mobile device (Android/iOS) vs laptop/desktop/web
-    final bool isMobile =
-        !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.iOS);
+  /// Opens the map picker. Keeps the current choice if the user backs out.
+  Future<void> _pickRemoteLocation() async {
+    if (_latitude == null || _longitude == null) {
+      showPenguinSnack(
+        context,
+        'Waiting for your GPS location. Remote reports must be near you.',
+      );
+      _fetchLocation();
+      return;
+    }
+    final picked = await Navigator.push<LatLng>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationPicker(
+          device: LatLng(_latitude!, _longitude!),
+          initial: _remoteLocation,
+        ),
+      ),
+    );
+    if (picked != null && mounted) {
+      setState(() => _remoteLocation = picked);
+    }
+  }
 
-    final ImageSource source = isMobile
+  Future<void> _attachPhoto() async {
+    final ImageSource source = _usesCamera
         ? ImageSource.camera
         : ImageSource.gallery;
 
@@ -108,15 +143,27 @@ class _ReportState extends State<Report> {
     return _imageUploader.upload(bytes, accessToken: token);
   }
 
-  Future<String> processReport(String imageKey, String token) async {
+  Future<({String id, String status})> processReport(
+    String imageKey,
+    String token,
+  ) async {
+    final remote = _remoteLocation;
     final reportId = await _reports.create(
       imageKey: imageKey,
-      latitude: _latitude!,
-      longitude: _longitude!,
+      // The report's pin: the spot picked on the map, or else the phone's GPS
+      latitude: remote?.latitude ?? _latitude!,
+      longitude: remote?.longitude ?? _longitude!,
+      title: title.text.trim(),
       description: description.text.trim(),
       accessToken: token,
+      replaces: _rejectedReportId,
+      locationSource: remote == null ? 'ONSITE' : 'REMOTE',
+      // The server checks the pin is within 12 km of where the phone really is
+      deviceLatitude: remote == null ? null : _latitude,
+      deviceLongitude: remote == null ? null : _longitude,
     );
-    return _reports.waitForResult(reportId, accessToken: token);
+    final status = await _reports.waitForResult(reportId, accessToken: token);
+    return (id: reportId, status: status);
   }
 
   String _statusMessage(String status) {
@@ -124,7 +171,7 @@ class _ReportState extends State<Report> {
       case 'CONFIRMED':
         return 'Report confirmed. Thank you!';
       case 'REJECTED':
-        return 'We could not spot road damage in this photo. Try a clearer photo.';
+        return 'We could not spot road damage in this photo. Take a new, clearer photo to try again.';
       default:
         return 'Still checking your photo. Your report is saved and will be reviewed shortly.';
     }
@@ -179,12 +226,14 @@ class _ReportState extends State<Report> {
       if (!mounted) return;
       setState(() => _uploadedImageKey = key);
 
-      final status = await processReport(key, token);
+      final result = await processReport(key, token);
       if (!mounted) return;
       setState(() {
-        _reportStatus = status;
+        _reportStatus = result.status;
+        // Remember a rejected report so the next attempt replaces it, else forget it
+        _rejectedReportId = result.status == 'REJECTED' ? result.id : null;
         // A rejected report keeps its image; a new attempt uploads a fresh one
-        if (status == 'REJECTED') _uploadedImageKey = null;
+        if (result.status == 'REJECTED') _uploadedImageKey = null;
       });
     } catch (error) {
       if (mounted) {
@@ -201,14 +250,13 @@ class _ReportState extends State<Report> {
 
   @override
   Widget build(BuildContext context) {
-    final bool isMobile =
-        !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.iOS);
+    // Camera wording and icons only when the photo will come from the camera
+    final bool isMobile = _usesCamera;
 
     final text = Theme.of(context).textTheme;
     final bool hasLocation = _latitude != null && _longitude != null;
     final bool canEditPhoto = !_isPickingPhoto && !_isSubmitting;
+    final remote = _remoteLocation;
 
     return Scaffold(
       appBar: AppBar(
@@ -265,6 +313,7 @@ class _ReportState extends State<Report> {
                   TextFormField(
                     controller: title,
                     textInputAction: TextInputAction.next,
+                    maxLength: 100,
                     decoration: const InputDecoration(
                       labelText: 'Issue title',
                       hintText: 'e.g. Pothole on Main St',
@@ -283,32 +332,76 @@ class _ReportState extends State<Report> {
                     ),
                   ),
                   const SizedBox(height: 8),
+                  Text('Where is the damage?', style: text.titleMedium),
+                  const SizedBox(height: 8),
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(
+                        value: false,
+                        icon: Icon(Icons.my_location_rounded),
+                        label: Text("I'm here"),
+                      ),
+                      ButtonSegment(
+                        value: true,
+                        icon: Icon(Icons.edit_location_alt_rounded),
+                        label: Text('Somewhere else'),
+                      ),
+                    ],
+                    selected: {_isRemote},
+                    // Locked while submitting so the location can't change mid-upload
+                    onSelectionChanged: _isSubmitting
+                        ? null
+                        : (selection) {
+                            if (selection.first) {
+                              _pickRemoteLocation();
+                            } else {
+                              setState(() => _remoteLocation = null);
+                            }
+                          },
+                  ),
+                  const SizedBox(height: 10),
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14,
                       vertical: 12,
                     ),
                     decoration: BoxDecoration(
-                      color: PenguinColors.blue.withValues(alpha: 0.12),
+                      color: (remote == null
+                              ? PenguinColors.blue
+                              : PenguinColors.orange)
+                          .withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: Row(
                       children: [
                         Icon(
-                          hasLocation
+                          remote != null
+                              ? Icons.edit_location_alt_rounded
+                              : hasLocation
                               ? Icons.location_on_rounded
                               : Icons.location_searching_rounded,
-                          color: PenguinColors.blue,
+                          color: remote == null
+                              ? PenguinColors.blue
+                              : PenguinColors.orange,
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            hasLocation
+                            remote != null
+                                ? 'Pinned: ${remote.latitude.toStringAsFixed(5)}, ${remote.longitude.toStringAsFixed(5)}'
+                                : hasLocation
                                 ? '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}'
                                 : 'Fetching GPS coordinates...',
                             style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
                         ),
+                        if (remote != null)
+                          TextButton(
+                            onPressed: _isSubmitting
+                                ? null
+                                : _pickRemoteLocation,
+                            child: const Text('Move pin'),
+                          ),
                       ],
                     ),
                   ),
@@ -449,22 +542,27 @@ class _ReportState extends State<Report> {
                   if (_isSubmitting || _reportStatus != null)
                     const SizedBox(height: 16),
                   ElevatedButton.icon(
+                    // The same photo would be rejected again, so after a rejection
+                    // this button asks for a new photo instead of resubmitting
                     onPressed:
                         _isSubmitting ||
                             _isPickingPhoto ||
                             _reportStatus == 'CONFIRMED' ||
                             _reportStatus == 'PENDING'
                         ? null
+                        : _reportStatus == 'REJECTED'
+                        ? _attachPhoto
                         : submitReport,
-                    icon: Icon(
-                      _reportStatus == 'REJECTED'
-                          ? Icons.refresh_rounded
-                          : Icons.send_rounded,
-                    ),
+                    icon: Icon(switch (_reportStatus) {
+                      'REJECTED' when isMobile => Icons.camera_alt_rounded,
+                      'REJECTED' => Icons.photo_library_rounded,
+                      _ => Icons.send_rounded,
+                    }),
                     label: Text(switch (_reportStatus) {
                       'CONFIRMED' => 'Report Submitted',
                       'PENDING' => 'Report Saved',
-                      'REJECTED' => 'Try Again',
+                      'REJECTED' when isMobile => 'Take a New Photo',
+                      'REJECTED' => 'Choose a New Photo',
                       _ => 'Submit Report',
                     }),
                   ),

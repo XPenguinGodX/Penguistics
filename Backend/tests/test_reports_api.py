@@ -35,13 +35,16 @@ def load_handler(script, modules):
 class ProcessReportTests(unittest.TestCase):
     def setUp(self):
         self.lambda_client = Mock()
+        self.s3 = Mock()
         self.report = Mock(id=uuid.uuid4(), status="PENDING")
+        self.report.retry_rejected.return_value = None
         self.Report = Mock(return_value=self.report)
         self.User = Mock()
         self.User.get_by_username.return_value = Mock(city="Salt Lake City")
 
         boto3 = types.ModuleType("boto3")
-        boto3.client = Mock(return_value=self.lambda_client)
+        clients = {"lambda": self.lambda_client, "s3": self.s3}
+        boto3.client = Mock(side_effect=lambda service, **_: clients[service])
         errors = types.ModuleType("botocore.exceptions")
         errors.BotoCoreError = FakeBotoCoreError
         errors.ClientError = FakeClientError
@@ -52,12 +55,13 @@ class ProcessReportTests(unittest.TestCase):
         self.handler = load_handler("process_report.py", {
             "boto3": boto3, "botocore": types.ModuleType("botocore"), "botocore.exceptions": errors,
             "models": types.ModuleType("models"), "models.Reports": reports, "models.Users": users})
-        self.environment = patch.dict(os.environ, {"VALIDATOR_FUNCTION_NAME": "test-validator"})
+        self.environment = patch.dict(os.environ, {"VALIDATOR_FUNCTION_NAME": "test-validator",
+                                                   "UPLOAD_BUCKET": "test-bucket"})
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
     def invoke(self, username="alice", **overrides):
-        body = {"imagepath": IMAGE_KEY, "lat": 40.76, "long": -111.89,
+        body = {"imagepath": IMAGE_KEY, "lat": 40.76, "long": -111.89, "title": "  Main St pothole  ",
                 "description": "  Deep pothole  ", "username": "mallory"}
         body.update(overrides)
         return self.handler(jwt_event(username, body=json.dumps(body)), None)
@@ -68,9 +72,13 @@ class ProcessReportTests(unittest.TestCase):
         self.assertEqual(json.loads(result["body"]), {"id": str(self.report.id), "status": "PENDING"})
         kwargs = self.Report.call_args.kwargs
         self.assertEqual((kwargs["username"], kwargs["city"]), ("alice", "Salt Lake City"))
+        self.assertEqual(kwargs["title"], "Main St pothole")
         self.assertEqual(kwargs["description"], "Deep pothole")
         self.assertIsNone(kwargs["confidencelvl"])
+        self.assertEqual(kwargs["location_source"], "ONSITE")
+        self.assertIsNone(kwargs["device_lat"])
         self.report.save.assert_called_once()
+        self.report.retry_rejected.assert_not_called()
         self.lambda_client.invoke.assert_called_once_with(
             FunctionName="test-validator", InvocationType="Event",
             Payload=json.dumps({"report_id": str(self.report.id), "image_key": IMAGE_KEY}))
@@ -84,6 +92,12 @@ class ProcessReportTests(unittest.TestCase):
 
     def test_invalid_reports_are_rejected_before_saving(self):
         cases = {"foreign key": {"imagepath": "PenguinThirdEyeMkI.onnx"},
+                 "blank title": {"title": "   "},
+                 "long title": {"title": "x" * 101},
+                 "missing title": {"title": None},
+                 "unknown location source": {"location_source": "SPACE"},
+                 "remote without phone GPS": {"location_source": "REMOTE"},
+                 "malformed replaces": {"replaces": "not-a-uuid"},
                  "blank description": {"description": "   "},
                  "long description": {"description": "x" * 201},
                  "bad latitude": {"lat": 91},
@@ -108,6 +122,46 @@ class ProcessReportTests(unittest.TestCase):
     def test_failed_validation_start_still_accepts_saved_report(self):
         self.lambda_client.invoke.side_effect = FakeClientError()
         self.assertEqual(self.invoke()["statusCode"], 202)
+
+    def test_retry_reuses_the_rejected_report_and_deletes_its_old_image(self):
+        rejected_id = uuid.uuid4()
+        old_image = f"PenguinAlbum/Potholes/{uuid.uuid4()}.jpg"
+        self.report.id = rejected_id
+        self.report.retry_rejected.return_value = old_image
+
+        result = self.invoke(replaces=str(rejected_id))
+
+        self.assertEqual(result["statusCode"], 202)
+        self.assertEqual(json.loads(result["body"])["id"], str(rejected_id))
+        self.assertEqual(self.Report.call_args.kwargs["id"], rejected_id)
+        self.report.save.assert_not_called()
+        self.s3.delete_object.assert_called_once_with(Bucket="test-bucket", Key=old_image)
+        self.lambda_client.invoke.assert_called_once()
+
+    def test_retry_of_a_report_that_cannot_be_reused_saves_a_new_one(self):
+        # Gone, someone else's, or not REJECTED: never overwrite it, make a fresh report
+        rejected_id = uuid.uuid4()
+        self.report.id = rejected_id
+        result = self.invoke(replaces=str(rejected_id))
+        self.assertEqual(result["statusCode"], 202)
+        # save() upserts by id, so reusing rejected_id here could overwrite another user's report
+        self.assertNotEqual(self.report.id, rejected_id)
+        self.report.save.assert_called_once()
+        self.s3.delete_object.assert_not_called()
+
+    def test_remote_report_near_the_phone_is_accepted(self):
+        # About 4.5 km north of the pin
+        result = self.invoke(location_source="REMOTE", device_lat=40.80, device_long=-111.89)
+        self.assertEqual(result["statusCode"], 202)
+        kwargs = self.Report.call_args.kwargs
+        self.assertEqual(kwargs["location_source"], "REMOTE")
+        self.assertEqual((kwargs["device_lat"], kwargs["device_long"]), (40.80, -111.89))
+
+    def test_remote_report_too_far_from_the_phone_is_rejected(self):
+        # About 41 km east of the pin
+        result = self.invoke(location_source="REMOTE", device_lat=40.76, device_long=-111.40)
+        self.assertEqual(result["statusCode"], 400)
+        self.report.save.assert_not_called()
 
 
 class GetReportTests(unittest.TestCase):

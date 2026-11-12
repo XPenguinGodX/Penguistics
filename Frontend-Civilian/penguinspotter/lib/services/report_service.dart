@@ -8,11 +8,13 @@ class ReportSummary {
   const ReportSummary({
     required this.id,
     required this.status,
+    required this.title,
     required this.description,
     required this.latitude,
     required this.longitude,
     this.confidence,
     this.createdAt,
+    this.locationSource = 'ONSITE',
   });
 
   /// Returns null for an entry missing its id or coordinates, so one bad row can't hide the rest.
@@ -27,6 +29,7 @@ class ReportSummary {
     return ReportSummary(
       id: id,
       status: json['status'] is String ? json['status'] as String : 'PENDING',
+      title: json['title'] is String ? json['title'] as String : '',
       description: json['description'] is String
           ? json['description'] as String
           : '',
@@ -34,16 +37,19 @@ class ReportSummary {
       longitude: long.toDouble(),
       confidence: confidence is num ? confidence.toDouble() : null,
       createdAt: createdAt is String ? DateTime.tryParse(createdAt) : null,
+      locationSource: json['location_source'] == 'REMOTE' ? 'REMOTE' : 'ONSITE',
     );
   }
 
   final String id;
   final String status;
+  final String title;
   final String description;
   final double latitude;
   final double longitude;
   final double? confidence; // 0 to 1; null until validation finishes
   final DateTime? createdAt;
+  final String locationSource; // 'ONSITE' (phone GPS) or 'REMOTE' (placed on the map)
 }
 
 class ReportService {
@@ -56,12 +62,20 @@ class ReportService {
   final http.Client _client;
 
   /// Saves a PENDING report and starts validation. Returns the report id.
+  /// Pass [replaces] with a REJECTED report's id to retry that report instead of adding a new one.
   Future<String> create({
     required String imageKey,
     required double latitude,
     required double longitude,
+    required String title,
     required String description,
     required String accessToken,
+    String? replaces,
+    // 'REMOTE' means [latitude]/[longitude] were placed on the map, and the
+    // device coordinates say where the phone really was
+    String locationSource = 'ONSITE',
+    double? deviceLatitude,
+    double? deviceLongitude,
   }) async {
     final response = await _client
         .post(
@@ -74,7 +88,12 @@ class ReportService {
             'imagepath': imageKey,
             'lat': latitude,
             'long': longitude,
+            'title': title,
             'description': description,
+            'replaces': ?replaces,
+            'location_source': locationSource,
+            'device_lat': ?deviceLatitude,
+            'device_long': ?deviceLongitude,
           }),
         )
         .timeout(const Duration(seconds: 20));

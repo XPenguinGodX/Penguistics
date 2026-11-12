@@ -81,7 +81,10 @@ Future<void> showReportSheet(BuildContext context, ReportSummary report) {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Your report', style: text.titleLarge),
+              Text(
+                report.title.isEmpty ? 'Your report' : report.title,
+                style: text.titleLarge,
+              ),
               const SizedBox(height: 12),
               StatusBanner(message: style.label, tone: style.tone),
               const SizedBox(height: 16),
@@ -92,6 +95,11 @@ Future<void> showReportSheet(BuildContext context, ReportSummary report) {
                 style: text.bodyLarge,
               ),
               const SizedBox(height: 16),
+              if (report.locationSource == 'REMOTE')
+                const _DetailRow(
+                  icon: Icons.edit_location_alt_rounded,
+                  text: 'Placed on the map (remote report)',
+                ),
               if (confidence != null)
                 _DetailRow(
                   icon: Icons.insights_rounded,

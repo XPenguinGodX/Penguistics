@@ -337,7 +337,7 @@ Resources:
     Properties:
       ServiceToken: !GetAtt DatabaseInitFunction.Arn
       # Bump this whenever InitialScheme.sql changes so CloudFormation reruns it
-      SchemaVersion: '2'
+      SchemaVersion: '3'
 
   ReportCleanupFunction:
     Type: AWS::Serverless::Function
@@ -368,6 +368,13 @@ Resources:
             - Effect: Allow
               Action: s3:DeleteObject
               Resource: !Sub 'arn:${AWS::Partition}:s3:::${UploadBucketName}/PenguinAlbum/Potholes/*'
+            # Lists uploaded images to find ones no report points to
+            - Effect: Allow
+              Action: s3:ListBucket
+              Resource: !Sub 'arn:${AWS::Partition}:s3:::${UploadBucketName}'
+              Condition:
+                StringLike:
+                  's3:prefix': 'PenguinAlbum/Potholes/*'
         - LambdaInvokePolicy:
             FunctionName: !Ref ValidateImageFunction
       Events:
@@ -446,11 +453,17 @@ Resources:
           DB_NAME: penguistics
           DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
           VALIDATOR_FUNCTION_NAME: !Ref ValidateImageFunction
+          UPLOAD_BUCKET: !Ref UploadBucketName
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
         - LambdaInvokePolicy:
             FunctionName: !Ref ValidateImageFunction
+        # A retried report deletes the photo it replaced
+        - Statement:
+            - Effect: Allow
+              Action: s3:DeleteObject
+              Resource: !Sub 'arn:${AWS::Partition}:s3:::${UploadBucketName}/PenguinAlbum/Potholes/*'
       Events:
         CreateReport:
           Type: HttpApi

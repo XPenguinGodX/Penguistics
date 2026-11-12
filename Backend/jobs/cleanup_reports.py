@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -13,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 REJECTED_RETENTION_DAYS = 3
 PENDING_RERUN_HOURS = 24
+# Upload URLs expire after 5 minutes, so a day-old image no report points to was abandoned
+ORPHAN_AGE_HOURS = 24
 IMAGE_PREFIX = 'PenguinAlbum/Potholes/'
 S3_DELETE_BATCH = 1000
 
@@ -31,6 +34,23 @@ def delete_images(bucket, image_paths):
             continue
         for error in result.get('Errors', []):
             logger.error('Could not delete %s: %s', error.get('Key'), error.get('Message'))
+
+
+def delete_orphan_images(bucket):
+    """Delete uploaded images older than ORPHAN_AGE_HOURS that no report points to."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=ORPHAN_AGE_HOURS)
+    deleted = 0
+    try:
+        # S3 lists at most 1000 keys per page, the same size as one delete batch
+        for page in s3.get_paginator('list_objects_v2').paginate(Bucket=bucket, Prefix=IMAGE_PREFIX):
+            old_keys = [item['Key'] for item in page.get('Contents', []) if item['LastModified'] < cutoff]
+            orphans = sorted(set(old_keys) - Report.find_image_paths(old_keys))
+            if orphans:
+                delete_images(bucket, orphans)
+                deleted += len(orphans)
+    except (BotoCoreError, ClientError):
+        logger.exception('Could not list report images for the orphan sweep')
+    return deleted
 
 
 def rerun_validation(function_name, reports):
@@ -59,10 +79,12 @@ def handler(event, context):
         else:
             logger.error('UPLOAD_BUCKET is not configured; %d images were not deleted', len(deleted_paths))
 
+    orphans = delete_orphan_images(bucket) if bucket else 0
+
     rerun = 0
     if validator:
         rerun = rerun_validation(validator, Report.get_stale_pending(PENDING_RERUN_HOURS))
     else:
         logger.warning('VALIDATOR_FUNCTION_NAME is not configured; skipping pending reruns')
 
-    return {'deleted': len(deleted_paths), 'rerun': rerun}
+    return {'deleted': len(deleted_paths), 'orphans': orphans, 'rerun': rerun}
