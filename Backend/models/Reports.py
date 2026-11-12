@@ -5,7 +5,7 @@ from database.connection import get_db_connection
 # Column order shared by every SELECT that builds a full Report (see Report._from_row)
 COLUMNS = (
     "id, username, imagepath, long, lat, confidencelvl, title, description, status, city, "
-    "location_source, device_long, device_lat"
+    "location_source, device_long, device_lat, state, geocoded"
 )
 
 
@@ -24,6 +24,8 @@ class Report:
         location_source: str = "ONSITE",
         device_long: float | None = None,
         device_lat: float | None = None,
+        state: str | None = None,
+        geocoded: bool = False,
         id: uuid.UUID | None = None,
     ):
         self.username: str = username
@@ -40,6 +42,9 @@ class Report:
         self.location_source: str = location_source
         self.device_long: float | None = float(device_long) if device_long is not None else None
         self.device_lat: float | None = float(device_lat) if device_lat is not None else None
+        self.state: str | None = state
+        # True when city/state came from the report's coordinates, False when from the reporter's profile
+        self.geocoded: bool = bool(geocoded)
         self.id: uuid.UUID = id if id is not None else uuid.uuid4()
 
     def __str__(self) -> str:
@@ -54,6 +59,8 @@ class Report:
         Description: {self.description}
         Status: {self.status}
         City: {self.city}
+        State: {self.state}
+        Geocoded: {self.geocoded}
         LocationSource: {self.location_source}
         """
 
@@ -73,6 +80,8 @@ class Report:
             "description": self.description,
             "status": self.status,
             "city": self.city,
+            "state": self.state,
+            "geocoded": self.geocoded,
             "location_source": self.location_source,
             "device_long": self.device_long,
             "device_lat": self.device_lat,
@@ -95,6 +104,8 @@ class Report:
             title=data.get("title", ""),
             description=data.get("description", ""),
             city=data.get("city", ""),
+            state=data.get("state"),
+            geocoded=data.get("geocoded", False),
             status=data.get("status", "PENDING"),
             location_source=data.get("location_source", "ONSITE"),
             device_long=data.get("device_long"),
@@ -119,6 +130,8 @@ class Report:
             location_source=row[10],
             device_long=row[11],
             device_lat=row[12],
+            state=row[13],
+            geocoded=row[14],
         )
 
     def save(self) -> dict:
@@ -129,14 +142,17 @@ class Report:
             cursor.execute(
                 """
                 INSERT INTO reports (id, username, imagepath, long, lat, confidencelvl, title, description,
-                                     status, city, location_source, device_long, device_lat)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                     status, city, location_source, device_long, device_lat, state, geocoded)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     confidencelvl = EXCLUDED.confidencelvl,
                     title = EXCLUDED.title,
                     description = EXCLUDED.description,
                     status = EXCLUDED.status,
-                    city = EXCLUDED.city;
+                    city = EXCLUDED.city,
+                    state = EXCLUDED.state,
+                    geocoded = EXCLUDED.geocoded,
+                    updated_at = now();
                 """,
                 (
                     str(self.id),
@@ -152,6 +168,8 @@ class Report:
                     self.location_source,
                     self.device_long,
                     self.device_lat,
+                    self.state,
+                    self.geocoded,
                 ),
             )
             conn.commit()
@@ -190,8 +208,9 @@ class Report:
                 """
                 UPDATE reports
                 SET imagepath = %s, long = %s, lat = %s, title = %s, description = %s, city = %s,
+                    state = %s, geocoded = %s,
                     location_source = %s, device_long = %s, device_lat = %s,
-                    status = 'PENDING', confidencelvl = NULL, created_at = now()
+                    status = 'PENDING', confidencelvl = NULL, created_at = now(), updated_at = now()
                 WHERE id = %s;
                 """,
                 (
@@ -201,6 +220,8 @@ class Report:
                     self.title,
                     self.description,
                     self.city,
+                    self.state,
+                    self.geocoded,
                     self.location_source,
                     self.device_long,
                     self.device_lat,
@@ -299,7 +320,7 @@ class Report:
             cursor.execute(
                 """
                 UPDATE reports
-                SET status = %s, confidencelvl = %s
+                SET status = %s, confidencelvl = %s, updated_at = now()
                 WHERE id = %s AND status = 'PENDING';
                 """,
                 (status, confidencelvl, str(report_id)),
@@ -353,6 +374,78 @@ class Report:
                 (list(image_paths),),
             )
             return {row[0] for row in cursor.fetchall()}
+        finally:
+            cursor.close()
+
+    @classmethod
+    def get_ungeocoded(cls, limit: int, max_attempts: int) -> list[dict]:
+        """Fetch up to `limit` reports whose city/state still come from the reporter's profile, oldest first.
+
+        Skips REJECTED reports (deleted within days, and no city ever sees them)
+        and reports that have used up their `max_attempts` geocoding tries.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT id, lat, long, geocode_attempts
+                FROM reports
+                WHERE geocoded = false
+                  AND status <> 'REJECTED'
+                  AND geocode_attempts < %s
+                ORDER BY created_at
+                LIMIT %s;
+                """,
+                (max_attempts, limit),
+            )
+            return [
+                {"id": str(row[0]), "lat": float(row[1]), "long": float(row[2]), "geocode_attempts": row[3]}
+                for row in cursor.fetchall()
+            ]
+        finally:
+            cursor.close()
+
+    @classmethod
+    def set_geocoded_location(cls, report_id: str | uuid.UUID, city: str, state: str) -> bool:
+        """Replace a report's profile city/state with the geocoded ones. Returns False if it was already geocoded.
+
+        Leaves updated_at alone: it tracks changes to the report itself (like status), not this correction.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                UPDATE reports
+                SET city = %s, state = %s, geocoded = true
+                WHERE id = %s AND geocoded = false;
+                """,
+                (city, state, str(report_id)),
+            )
+            updated = cursor.rowcount == 1
+            conn.commit()
+            return updated
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    @classmethod
+    def set_geocode_attempts(cls, report_id: str | uuid.UUID, attempts: int) -> None:
+        """Record how many geocoding tries a report has used."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE reports SET geocode_attempts = %s WHERE id = %s;",
+                (attempts, str(report_id)),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             cursor.close()
 

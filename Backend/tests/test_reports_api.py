@@ -1,4 +1,5 @@
 """Exercise POST /reports and GET /reports/{id} with fake Lambda and models; never contact AWS."""
+import io
 import json
 import os
 from pathlib import Path
@@ -40,7 +41,12 @@ class ProcessReportTests(unittest.TestCase):
         self.report.retry_rejected.return_value = None
         self.Report = Mock(return_value=self.report)
         self.User = Mock()
-        self.User.get_by_username.return_value = Mock(city="Salt Lake City")
+        self.User.get_by_username.return_value = Mock(city="Salt Lake City", state="Utah")
+        # What the fake GeocodeFunction answers; an exception here is raised by invoke instead
+        self.geocode_result = {"found": True, "city": "Provo", "state": "Utah"}
+        self.geocode_calls = []
+        self.validator_invoke = Mock()
+        self.lambda_client.invoke.side_effect = self.fake_invoke
 
         boto3 = types.ModuleType("boto3")
         clients = {"lambda": self.lambda_client, "s3": self.s3}
@@ -48,17 +54,33 @@ class ProcessReportTests(unittest.TestCase):
         errors = types.ModuleType("botocore.exceptions")
         errors.BotoCoreError = FakeBotoCoreError
         errors.ClientError = FakeClientError
+        config = types.ModuleType("botocore.config")
+        config.Config = Mock()
         reports = types.ModuleType("models.Reports")
         reports.Report = self.Report
         users = types.ModuleType("models.Users")
         users.User = self.User
         self.handler = load_handler("process_report.py", {
             "boto3": boto3, "botocore": types.ModuleType("botocore"), "botocore.exceptions": errors,
+            "botocore.config": config,
             "models": types.ModuleType("models"), "models.Reports": reports, "models.Users": users})
         self.environment = patch.dict(os.environ, {"VALIDATOR_FUNCTION_NAME": "test-validator",
+                                                   "GEOCODER_FUNCTION_NAME": "test-geocoder",
                                                    "UPLOAD_BUCKET": "test-bucket"})
         self.environment.start()
         self.addCleanup(self.environment.stop)
+
+    def fake_invoke(self, FunctionName, **kwargs):
+        """Answer geocoder calls from self.geocode_result; send validator calls to self.validator_invoke."""
+        if FunctionName != "test-geocoder":
+            return self.validator_invoke(FunctionName=FunctionName, **kwargs)
+        self.geocode_calls.append(json.loads(kwargs["Payload"]))
+        if isinstance(self.geocode_result, Exception):
+            raise self.geocode_result
+        response = {"Payload": io.BytesIO(json.dumps(self.geocode_result).encode())}
+        if self.geocode_result.get("crashed"):
+            response["FunctionError"] = "Unhandled"
+        return response
 
     def invoke(self, username="alice", **overrides):
         body = {"imagepath": IMAGE_KEY, "lat": 40.76, "long": -111.89, "title": "  Main St pothole  ",
@@ -71,7 +93,7 @@ class ProcessReportTests(unittest.TestCase):
         self.assertEqual(result["statusCode"], 202)
         self.assertEqual(json.loads(result["body"]), {"id": str(self.report.id), "status": "PENDING"})
         kwargs = self.Report.call_args.kwargs
-        self.assertEqual((kwargs["username"], kwargs["city"]), ("alice", "Salt Lake City"))
+        self.assertEqual(kwargs["username"], "alice")
         self.assertEqual(kwargs["title"], "Main St pothole")
         self.assertEqual(kwargs["description"], "Deep pothole")
         self.assertIsNone(kwargs["confidencelvl"])
@@ -79,7 +101,7 @@ class ProcessReportTests(unittest.TestCase):
         self.assertIsNone(kwargs["device_lat"])
         self.report.save.assert_called_once()
         self.report.retry_rejected.assert_not_called()
-        self.lambda_client.invoke.assert_called_once_with(
+        self.validator_invoke.assert_called_once_with(
             FunctionName="test-validator", InvocationType="Event",
             Payload=json.dumps({"report_id": str(self.report.id), "image_key": IMAGE_KEY}))
 
@@ -117,10 +139,10 @@ class ProcessReportTests(unittest.TestCase):
     def test_database_failure_does_not_start_validation(self):
         self.report.save.side_effect = RuntimeError("db down")
         self.assertEqual(self.invoke()["statusCode"], 503)
-        self.lambda_client.invoke.assert_not_called()
+        self.validator_invoke.assert_not_called()
 
     def test_failed_validation_start_still_accepts_saved_report(self):
-        self.lambda_client.invoke.side_effect = FakeClientError()
+        self.validator_invoke.side_effect = FakeClientError()
         self.assertEqual(self.invoke()["statusCode"], 202)
 
     def test_retry_reuses_the_rejected_report_and_deletes_its_old_image(self):
@@ -136,7 +158,7 @@ class ProcessReportTests(unittest.TestCase):
         self.assertEqual(self.Report.call_args.kwargs["id"], rejected_id)
         self.report.save.assert_not_called()
         self.s3.delete_object.assert_called_once_with(Bucket="test-bucket", Key=old_image)
-        self.lambda_client.invoke.assert_called_once()
+        self.validator_invoke.assert_called_once()
 
     def test_retry_of_a_report_that_cannot_be_reused_saves_a_new_one(self):
         # Gone, someone else's, or not REJECTED: never overwrite it, make a fresh report
@@ -162,6 +184,46 @@ class ProcessReportTests(unittest.TestCase):
         result = self.invoke(location_source="REMOTE", device_lat=40.76, device_long=-111.40)
         self.assertEqual(result["statusCode"], 400)
         self.report.save.assert_not_called()
+
+    def test_report_city_comes_from_the_pin_not_the_profile(self):
+        # alice lives in Salt Lake City, but the pothole is in Provo
+        self.assertEqual(self.invoke()["statusCode"], 202)
+        kwargs = self.Report.call_args.kwargs
+        self.assertEqual((kwargs["city"], kwargs["state"], kwargs["geocoded"]), ("Provo", "Utah", True))
+        self.assertEqual(self.geocode_calls, [{"lat": 40.76, "long": -111.89}])
+
+    def test_remote_report_is_geocoded_at_the_pin_not_the_phone(self):
+        self.invoke(location_source="REMOTE", device_lat=40.80, device_long=-111.89)
+        self.assertEqual(self.geocode_calls, [{"lat": 40.76, "long": -111.89}])
+
+    def test_geocoder_problems_fall_back_to_the_profile_city(self):
+        cases = {"invoke error": FakeClientError(),
+                 "timeout": FakeBotoCoreError(),
+                 "geocoder crashed": {"crashed": True, "errorMessage": "boom"},
+                 "no city at the pin": {"found": False, "city": None, "state": None}}
+        for name, answer in cases.items():
+            with self.subTest(name):
+                self.geocode_result = answer
+                self.report.save.reset_mock()
+                self.assertEqual(self.invoke()["statusCode"], 202)
+                kwargs = self.Report.call_args.kwargs
+                self.assertEqual((kwargs["city"], kwargs["state"], kwargs["geocoded"]),
+                                 ("Salt Lake City", "Utah", False))
+                self.report.save.assert_called_once()
+
+    def test_missing_geocoder_configuration_falls_back_to_the_profile_city(self):
+        with patch.dict(os.environ, {"GEOCODER_FUNCTION_NAME": ""}):
+            self.assertEqual(self.invoke()["statusCode"], 202)
+        self.assertFalse(self.Report.call_args.kwargs["geocoded"])
+        self.assertEqual(self.geocode_calls, [])
+
+    def test_retried_report_is_geocoded_too(self):
+        rejected_id = uuid.uuid4()
+        self.report.retry_rejected.return_value = f"PenguinAlbum/Potholes/{uuid.uuid4()}.jpg"
+        self.invoke(replaces=str(rejected_id))
+        kwargs = self.Report.call_args.kwargs
+        self.assertEqual((kwargs["id"], kwargs["city"], kwargs["geocoded"]), (rejected_id, "Provo", True))
+        self.report.retry_rejected.assert_called_once()
 
 
 class GetReportTests(unittest.TestCase):

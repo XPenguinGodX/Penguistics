@@ -55,3 +55,38 @@ ALTER TABLE reports ADD COLUMN IF NOT EXISTS location_source location_source NOT
 -- Where the phone actually was for a REMOTE report (NULL for ONSITE, where it equals lat/long)
 ALTER TABLE reports ADD COLUMN IF NOT EXISTS device_long DOUBLE PRECISION;
 ALTER TABLE reports ADD COLUMN IF NOT EXISTS device_lat DOUBLE PRECISION;
+
+-- v4: the state the report is in, so two cities with the same name stay apart.
+-- Older reports start with the reporter's home state; geocoding replaces it with the real one.
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS state VARCHAR(100);
+UPDATE reports r SET state = u.state FROM users u WHERE r.username = u.username AND r.state IS NULL;
+
+-- v4: true once city/state came from the report's coordinates, false while they are the
+-- reporter's home city/state (every older report, and any report the geocoder couldn't place)
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS geocoded BOOLEAN NOT NULL DEFAULT false;
+
+-- v4: failed geocoding tries; the nightly cleanup job stops retrying a report at its limit
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS geocode_attempts SMALLINT NOT NULL DEFAULT 0;
+
+-- v4: a partial index holds only the rows matching its WHERE, so it stays tiny:
+-- just the reports still waiting to be geocoded, in the order the cleanup job reads them
+CREATE INDEX IF NOT EXISTS reports_ungeocoded_idx ON reports (created_at) WHERE geocoded = false;
+
+-- v4: when a report last changed (status changes by the city, retries, validation)
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+UPDATE reports SET updated_at = created_at WHERE updated_at IS NULL;
+ALTER TABLE reports ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;
+
+-- v4: which city each city staff account works for. Staff are created by an admin, not by
+-- the sign-up trigger, so they have no users row and this table has no foreign key to it.
+CREATE TABLE IF NOT EXISTS city_staff (
+    username VARCHAR(100) PRIMARY KEY,
+    city VARCHAR(100) NOT NULL,
+    state VARCHAR(100) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- v4: the city map's lookup. The expressions must match the query's exactly
+-- (lower(trim(...))) or Postgres can't use the index.
+CREATE INDEX IF NOT EXISTS reports_city_lookup_idx
+    ON reports (lower(trim(state)), lower(trim(city)), status);

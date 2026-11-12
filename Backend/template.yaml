@@ -337,7 +337,7 @@ Resources:
     Properties:
       ServiceToken: !GetAtt DatabaseInitFunction.Arn
       # Bump this whenever InitialScheme.sql changes so CloudFormation reruns it
-      SchemaVersion: '3'
+      SchemaVersion: '4'
 
   ReportCleanupFunction:
     Type: AWS::Serverless::Function
@@ -361,9 +361,12 @@ Resources:
           DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
           UPLOAD_BUCKET: !Ref UploadBucketName
           VALIDATOR_FUNCTION_NAME: !Ref ValidateImageFunction
+          GEOCODER_FUNCTION_NAME: !Ref GeocodeFunction
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+        - LambdaInvokePolicy:
+            FunctionName: !Ref GeocodeFunction
         - Statement:
             - Effect: Allow
               Action: s3:DeleteObject
@@ -382,6 +385,20 @@ Resources:
           Type: Schedule
           Properties:
             Schedule: rate(1 day)
+
+  # Outside the VPC on purpose: Amazon Location is a public AWS API and the VPC has no internet.
+  # VPC Lambdas invoke it through LambdaEndpoint. It never touches the database.
+  GeocodeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: scripts/
+      Handler: geocode.handler
+      Timeout: 5
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: geo-places:ReverseGeocode
+              Resource: !Sub 'arn:${AWS::Partition}:geo-places:${AWS::Region}::provider/default'
 
   InferenceLayer:
     Type: AWS::Serverless::LayerVersion
@@ -453,12 +470,15 @@ Resources:
           DB_NAME: penguistics
           DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
           VALIDATOR_FUNCTION_NAME: !Ref ValidateImageFunction
+          GEOCODER_FUNCTION_NAME: !Ref GeocodeFunction
           UPLOAD_BUCKET: !Ref UploadBucketName
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
         - LambdaInvokePolicy:
             FunctionName: !Ref ValidateImageFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref GeocodeFunction
         # A retried report deletes the photo it replaced
         - Statement:
             - Effect: Allow

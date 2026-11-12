@@ -8,12 +8,16 @@ import re
 import uuid
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from models.Reports import Report
 from models.Users import User
 
-lambda_client = boto3.client('lambda')
+# Short timeouts and no retries: a slow geocoder must not use up this function's 15 seconds.
+# (The validator call is asynchronous and returns at once, so it is unaffected.)
+lambda_client = boto3.client('lambda', config=Config(
+    connect_timeout=2, read_timeout=6, retries={'total_max_attempts': 1}))
 s3 = boto3.client('s3')
 logger = logging.getLogger(__name__)
 IMAGE_KEY = re.compile(r'PenguinAlbum/Potholes/[0-9a-f-]{36}\.(jpg|png|webp)')
@@ -76,6 +80,31 @@ def distance_km(lat1, long1, lat2, long2):
     return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(a))
 
 
+def geocode(lat, long):
+    """Ask GeocodeFunction which city and state a point is in.
+
+    Returns (city, state), or None if the geocoder failed or found no city there.
+    Never raises, so a geocoder problem can't block a report.
+    """
+    function_name = os.environ.get('GEOCODER_FUNCTION_NAME')
+    if not function_name:
+        logger.warning('GEOCODER_FUNCTION_NAME is not configured; using the profile city')
+        return None
+    try:
+        result = lambda_client.invoke(
+            FunctionName=function_name,
+            Payload=json.dumps({'lat': lat, 'long': long}),
+        )
+        payload = json.loads(result['Payload'].read())
+    except (BotoCoreError, ClientError, KeyError, ValueError):
+        logger.exception('Could not geocode %s, %s', lat, long)
+        return None
+    # FunctionError means the geocoder itself crashed or Amazon Location failed
+    if result.get('FunctionError') or not isinstance(payload, dict) or not payload.get('found'):
+        return None
+    return payload.get('city'), payload.get('state')
+
+
 def delete_old_image(image_key, new_key):
     """Best effort: a leftover image is removed later by the daily cleanup job anyway."""
     bucket = os.environ.get('UPLOAD_BUCKET')
@@ -132,6 +161,10 @@ def handler(event, context):
         user = User.get_by_username(username)
         if user is None:
             return response(403, {'message': 'Finish setting up your account before submitting reports.'})
+        # The city that owns the road is where the pin is, not where the reporter lives.
+        # If geocoding fails, fall back to the profile; the cleanup job geocodes it later.
+        place = geocode(lat, long)
+        city, state = place if place else (user.city, user.state)
         report = Report(
             id=replaces,
             username=username,
@@ -141,7 +174,9 @@ def handler(event, context):
             confidencelvl=None,
             title=title,
             description=description,
-            city=user.city,
+            city=city,
+            state=state,
+            geocoded=place is not None,
             location_source=location_source,
             device_long=device_long,
             device_lat=device_lat,
