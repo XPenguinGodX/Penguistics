@@ -172,6 +172,15 @@ Resources:
         - ALLOW_USER_PASSWORD_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
 
+  # City employees. Membership shows up in the access token's cognito:groups claim,
+  # which the /city endpoints check. Each member's city is in the city_staff table.
+  CityStaffGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: CityStaff
+      UserPoolId: !Ref UserPool
+      Description: City staff who manage reports for one city (see the city_staff table)
+
   # ---------- Private network: nothing here has a route to or from the internet ----------
 
   PrivateVpc:
@@ -598,6 +607,86 @@ Resources:
             Auth:
               Authorizer: UploadUserAuthorizer
 
+  CityReportsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - DatabaseInitializer
+    Properties:
+      CodeUri: .
+      Handler: scripts.city_reports.handler
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt PostgresDatabase.Endpoint.Address
+          DB_PORT: !GetAtt PostgresDatabase.Endpoint.Port
+          DB_NAME: penguistics
+          DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Events:
+        ListCityReports:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PenguisticsApi
+            Path: /city/reports
+            Method: GET
+            Auth:
+              Authorizer: UploadUserAuthorizer
+
+  # Run by hand by an admin (no API route). Outside the VPC because Cognito is a public AWS API;
+  # it has SaveStaffFunction, inside the VPC, write the database row.
+  CreateStaffFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: scripts/
+      Handler: create_staff.handler
+      Timeout: 30
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref UserPool
+          SAVE_STAFF_FUNCTION_NAME: !Ref SaveStaffFunction
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminCreateUser
+                - cognito-idp:AdminAddUserToGroup
+                # Undoes a half-created account if adding it to the group or database fails
+                - cognito-idp:AdminDeleteUser
+              Resource: !GetAtt UserPool.Arn
+        - LambdaInvokePolicy:
+            FunctionName: !Ref SaveStaffFunction
+
+  # Writes one city_staff row. Only CreateStaffFunction invokes it.
+  SaveStaffFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - DatabaseInitializer
+    Properties:
+      CodeUri: .
+      Handler: models.CityStaff.save_staff_handler
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt PostgresDatabase.Endpoint.Address
+          DB_PORT: !GetAtt PostgresDatabase.Endpoint.Port
+          DB_NAME: penguistics
+          DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
+
   PostConfirmationFunction:
     Type: AWS::Serverless::Function
     DependsOn:
@@ -643,6 +732,12 @@ Outputs:
   HealthEndpoint:
     Description: URL for the GET /health endpoint
     Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/health'
+  CityReportsEndpoint:
+    Description: Authenticated GET /city/reports for CityStaff accounts
+    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/city/reports'
+  CreateStaffFunctionName:
+    Description: Invoke by hand to create a city staff account (see README "Creating city staff accounts")
+    Value: !Ref CreateStaffFunction
   UserPoolId:
     Description: Cognito User Pool ID (for PoolId in amplifyconfiguration.dart)
     Value: !Ref UserPool

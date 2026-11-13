@@ -293,6 +293,47 @@ class Report:
             cursor.close()
 
     @classmethod
+    def get_city_summaries(cls, city: str, state: str, statuses: list[str], limit: int = 1000) -> list[dict]:
+        """Fetch one city's reports with the given statuses, newest first, for the city map.
+
+        Leaves out who reported it (username) and the image path: the city needs the damage, not the reporter.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            # lower(trim(...)) matches reports_city_lookup_idx exactly, so Postgres can use the index
+            cursor.execute(
+                """
+                SELECT id, status, title, description, lat, long, confidencelvl, location_source,
+                       created_at, updated_at
+                FROM reports
+                WHERE lower(trim(state)) = lower(trim(%s))
+                  AND lower(trim(city)) = lower(trim(%s))
+                  AND status = ANY(%s::status[])
+                ORDER BY created_at DESC
+                LIMIT %s;
+                """,
+                (state, city, list(statuses), limit),
+            )
+            return [
+                {
+                    "id": str(row[0]),
+                    "status": row[1],
+                    "title": row[2],
+                    "description": row[3],
+                    "lat": float(row[4]),
+                    "long": float(row[5]),
+                    "confidence": float(row[6]) if row[6] is not None else None,
+                    "location_source": row[7],
+                    "created_at": row[8].isoformat() if row[8] is not None else None,
+                    "updated_at": row[9].isoformat() if row[9] is not None else None,
+                }
+                for row in cursor.fetchall()
+            ]
+        finally:
+            cursor.close()
+
+    @classmethod
     def get_by_id(cls, report_id: str | uuid.UUID) -> "Report | None":
         """Fetch a single report by its UUID."""
         conn = get_db_connection()
