@@ -1,6 +1,12 @@
-"""GET /city/reports: the reports in the calling city employee's city, for the city map."""
+"""The city staff endpoints, all for reports in the calling employee's own city.
+
+GET /city/reports               the reports for the city map
+PUT /city/reports/{id}/status   move one report through the workflow
+"""
+import base64
 import json
 import logging
+import uuid
 
 from models.CityStaff import CityStaff
 from models.Reports import Report
@@ -9,7 +15,16 @@ logger = logging.getLogger(__name__)
 
 STAFF_GROUP = 'CityStaff'
 # What the city works with. PENDING (still being checked) and REJECTED (not road damage) are noise to them.
-CITY_STATUSES = ('CONFIRMED', 'ACTIVE', 'COMPLETED')
+CITY_STATUSES = ('CONFIRMED', 'ACTIVE', 'COMPLETED', 'DISMISSED')
+# The map leaves out dismissed reports unless the staff member asks for them with ?status=DISMISSED
+DEFAULT_STATUSES = ('CONFIRMED', 'ACTIVE', 'COMPLETED')
+# The workflow: each new status, and the statuses a report may be in to move to it.
+# Anything not listed here (going backwards, skipping ACTIVE, reopening a dismissed report) is a 409.
+ALLOWED_TRANSITIONS = {
+    'ACTIVE': ('CONFIRMED',),
+    'COMPLETED': ('ACTIVE',),
+    'DISMISSED': ('CONFIRMED', 'ACTIVE'),
+}
 
 
 def response(code, body):
@@ -42,7 +57,7 @@ def requested_statuses(event):
     """Parse ?status=ACTIVE or ?status=CONFIRMED,ACTIVE. Returns None if any value isn't allowed."""
     raw = (event.get('queryStringParameters') or {}).get('status')
     if not raw:
-        return list(CITY_STATUSES)
+        return list(DEFAULT_STATUSES)
     statuses = [value.strip().upper() for value in raw.split(',') if value.strip()]
     if not statuses or any(status not in CITY_STATUSES for status in statuses):
         return None
@@ -50,26 +65,88 @@ def requested_statuses(event):
     return list(dict.fromkeys(statuses))
 
 
-def handler(event, context):
+def request_body(event):
+    """The JSON body as a dict, or None if it is missing or isn't a JSON object."""
+    raw = event.get('body') or ''
+    try:
+        if event.get('isBase64Encoded'):
+            raw = base64.b64decode(raw).decode('utf-8')
+        body = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def calling_staff(event):
+    """Check the caller is city staff with a city. Returns (staff, None) or (None, error response)."""
     claims = token_claims(event)
     username = claims.get('username') or claims.get('cognito:username')
     if not username:
-        return response(401, {'message': 'Please log in to view city reports.'})
+        return None, response(401, {'message': 'Please log in to view city reports.'})
     if STAFF_GROUP not in token_groups(claims):
-        return response(403, {'message': 'This account is not a city staff account.'})
+        return None, response(403, {'message': 'This account is not a city staff account.'})
+    try:
+        staff = CityStaff.get_by_username(username)
+    except Exception:
+        logger.exception('Could not look up city staff %s', username)
+        return None, response(503, {'message': 'City reports are temporarily unavailable.'})
+    if staff is None:
+        # In the group but never assigned a city: show nothing rather than guess
+        return None, response(403, {'message': 'This staff account has no city assigned yet.'})
+    return staff, None
 
+
+def list_reports(event, staff):
     statuses = requested_statuses(event)
     if statuses is None:
         return response(400, {'message': f'status must be one or more of: {", ".join(CITY_STATUSES)}.'})
-
     try:
-        staff = CityStaff.get_by_username(username)
-        if staff is None:
-            # In the group but never assigned a city: show nothing rather than guess
-            return response(403, {'message': 'This staff account has no city assigned yet.'})
         reports = Report.get_city_summaries(staff.city, staff.state, statuses)
     except Exception:
-        logger.exception('Could not list city reports for %s', username)
+        logger.exception('Could not list city reports for %s', staff.username)
+        return response(503, {'message': 'City reports are temporarily unavailable.'})
+    return response(200, {'city': staff.city, 'state': staff.state, 'reports': reports})
+
+
+def change_status(event, staff):
+    raw_id = (event.get('pathParameters') or {}).get('id', '')
+    try:
+        report_id = str(uuid.UUID(raw_id))
+    except ValueError:
+        # Not even a valid id, so it can't be a report in this city
+        return response(404, {'message': 'No report with that id in your city.'})
+
+    body = request_body(event)
+    new_status = body.get('status') if body else None
+    new_status = new_status.strip().upper() if isinstance(new_status, str) else None
+    if new_status not in ALLOWED_TRANSITIONS:
+        return response(400, {'message': f'status must be one of: {", ".join(ALLOWED_TRANSITIONS)}.'})
+
+    try:
+        updated = Report.change_city_status(
+            report_id, staff.city, staff.state, list(ALLOWED_TRANSITIONS[new_status]), new_status)
+        if updated is not None:
+            return response(200, {'report': updated})
+        # Nothing changed: find out whether the report isn't ours to see (404) or just in the wrong state (409)
+        current = Report.get_city_status(report_id, staff.city, staff.state)
+    except Exception:
+        logger.exception('Could not change report %s to %s for %s', report_id, new_status, staff.username)
         return response(503, {'message': 'City reports are temporarily unavailable.'})
 
-    return response(200, {'city': staff.city, 'state': staff.state, 'reports': reports})
+    # PENDING and REJECTED reports are hidden from the city, so they get the same 404 as another city's
+    if current not in CITY_STATUSES:
+        return response(404, {'message': 'No report with that id in your city.'})
+    return response(409, {
+        'message': f'A {current} report can\'t be changed to {new_status}.',
+        'status': current,
+    })
+
+
+def handler(event, context):
+    staff, error = calling_staff(event)
+    if error:
+        return error
+    method = event.get('requestContext', {}).get('http', {}).get('method', 'GET')
+    if method == 'PUT':
+        return change_status(event, staff)
+    return list_reports(event, staff)

@@ -5,7 +5,7 @@ import 'package:penguin/pages/profile.dart';
 import 'package:penguin/pages/report.dart';
 import 'package:penguin/pages/signup.dart';
 import 'package:penguin/services/auth_session.dart';
-import 'package:penguin/theme/penguin_theme.dart';
+import 'package:penguin_shared/penguin_shared.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import 'package:penguin/amplifyconfiguration.dart';

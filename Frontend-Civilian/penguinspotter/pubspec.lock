@@ -821,6 +821,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.0"
+  penguin_shared:
+    dependency: "direct main"
+    description:
+      path: "../../packages/penguin_shared"
+      relative: true
+    source: path
+    version: "1.0.0"
   petitparser:
     dependency: transitive
     description:

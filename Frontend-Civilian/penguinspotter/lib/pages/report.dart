@@ -7,8 +7,7 @@ import 'package:penguin/pages/location_picker.dart';
 import 'package:penguin/services/auth_session.dart';
 import 'package:penguin/services/image_upload_service.dart';
 import 'package:penguin/services/report_service.dart';
-import 'package:penguin/theme/penguin_theme.dart';
-import 'package:penguin/widgets/penguin_widgets.dart';
+import 'package:penguin_shared/penguin_shared.dart';
 
 class Report extends StatefulWidget {
   const Report({super.key});

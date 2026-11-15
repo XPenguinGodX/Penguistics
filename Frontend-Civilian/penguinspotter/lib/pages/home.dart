@@ -6,11 +6,9 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:penguin/services/auth_session.dart';
 import 'package:penguin/services/report_service.dart';
-import 'package:penguin/theme/penguin_theme.dart';
-import 'package:penguin/widgets/penguin_map.dart';
 import 'package:penguin/widgets/penguin_menu.dart';
-import 'package:penguin/widgets/penguin_widgets.dart';
 import 'package:penguin/widgets/report_pins.dart';
+import 'package:penguin_shared/penguin_shared.dart';
 
 class Home extends StatefulWidget {
   const Home({super.key});

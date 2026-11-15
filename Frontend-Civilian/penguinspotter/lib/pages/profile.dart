@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:penguin/services/auth_session.dart';
 import 'package:penguin/services/profile_service.dart';
-import 'package:penguin/theme/penguin_theme.dart';
-import 'package:penguin/widgets/penguin_widgets.dart';
+import 'package:penguin_shared/penguin_shared.dart';
 
 // Mirrors the backend's rule: a letter (any alphabet) first, then letters and space . ' -
 final _placePattern = RegExp(r"^\p{L}[\p{L} .'\-]*$", unicode: true);

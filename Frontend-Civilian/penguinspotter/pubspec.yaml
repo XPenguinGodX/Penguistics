@@ -44,6 +44,9 @@ dependencies:
   image_picker: ^1.1.2
   http: ^1.2.0
   crypto: ^3.0.0
+  # Theme, widgets, map setup, and report pin styles shared with the city app
+  penguin_shared:
+    path: ../../packages/penguin_shared
 
 dev_dependencies:
   flutter_test:

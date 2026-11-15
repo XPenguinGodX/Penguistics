@@ -8,6 +8,27 @@ COLUMNS = (
     "location_source, device_long, device_lat, state, geocoded"
 )
 
+# What the city map sees of a report: no reporter (username) and no image path (see _city_summary)
+CITY_SUMMARY_COLUMNS = (
+    "id, status, title, description, lat, long, confidencelvl, location_source, created_at, updated_at"
+)
+
+
+def _city_summary(row) -> dict:
+    """Turn a row selected with CITY_SUMMARY_COLUMNS into the JSON shape the city app reads."""
+    return {
+        "id": str(row[0]),
+        "status": row[1],
+        "title": row[2],
+        "description": row[3],
+        "lat": float(row[4]),
+        "long": float(row[5]),
+        "confidence": float(row[6]) if row[6] is not None else None,
+        "location_source": row[7],
+        "created_at": row[8].isoformat() if row[8] is not None else None,
+        "updated_at": row[9].isoformat() if row[9] is not None else None,
+    }
+
 
 class Report:
     def __init__(
@@ -303,9 +324,8 @@ class Report:
         try:
             # lower(trim(...)) matches reports_city_lookup_idx exactly, so Postgres can use the index
             cursor.execute(
-                """
-                SELECT id, status, title, description, lat, long, confidencelvl, location_source,
-                       created_at, updated_at
+                f"""
+                SELECT {CITY_SUMMARY_COLUMNS}
                 FROM reports
                 WHERE lower(trim(state)) = lower(trim(%s))
                   AND lower(trim(city)) = lower(trim(%s))
@@ -315,21 +335,61 @@ class Report:
                 """,
                 (state, city, list(statuses), limit),
             )
-            return [
-                {
-                    "id": str(row[0]),
-                    "status": row[1],
-                    "title": row[2],
-                    "description": row[3],
-                    "lat": float(row[4]),
-                    "long": float(row[5]),
-                    "confidence": float(row[6]) if row[6] is not None else None,
-                    "location_source": row[7],
-                    "created_at": row[8].isoformat() if row[8] is not None else None,
-                    "updated_at": row[9].isoformat() if row[9] is not None else None,
-                }
-                for row in cursor.fetchall()
-            ]
+            return [_city_summary(row) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+
+    @classmethod
+    def change_city_status(
+        cls, report_id: str, city: str, state: str, from_statuses: list[str], new_status: str
+    ) -> dict | None:
+        """Move one report in this city from one of `from_statuses` to `new_status`.
+
+        The status check is part of the UPDATE itself, so two staff clicking at once can't both
+        win: the second one's WHERE no longer matches. Returns the updated city summary,
+        or None if no report in this city currently has one of `from_statuses`.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f"""
+                UPDATE reports
+                SET status = %s, updated_at = now()
+                WHERE id = %s
+                  AND lower(trim(state)) = lower(trim(%s))
+                  AND lower(trim(city)) = lower(trim(%s))
+                  AND status = ANY(%s::status[])
+                RETURNING {CITY_SUMMARY_COLUMNS};
+                """,
+                (new_status, str(report_id), state, city, list(from_statuses)),
+            )
+            row = cursor.fetchone()
+            conn.commit()
+            return _city_summary(row) if row else None
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    @classmethod
+    def get_city_status(cls, report_id: str, city: str, state: str) -> str | None:
+        """The status of one report in this city, or None if this city has no report with that id."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT status FROM reports
+                WHERE id = %s
+                  AND lower(trim(state)) = lower(trim(%s))
+                  AND lower(trim(city)) = lower(trim(%s));
+                """,
+                (str(report_id), state, city),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
         finally:
             cursor.close()
 
@@ -379,7 +439,9 @@ class Report:
     def purge_expired(cls, days: int) -> list[str]:
         """Delete REJECTED (and never-resolved PENDING) reports older than `days`.
 
-        Returns the deleted reports' image paths so their S3 objects can be removed.
+        Never DISMISSED: a city dismissing a report is a decision worth keeping, and created_at
+        says nothing about when it was dismissed. Returns the deleted reports' image paths
+        so their S3 objects can be removed.
         """
         conn = get_db_connection()
         cursor = conn.cursor()

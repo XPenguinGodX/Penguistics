@@ -2,32 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:penguin/services/report_service.dart';
-import 'package:penguin/theme/penguin_theme.dart';
-import 'package:penguin/widgets/penguin_widgets.dart';
-
-/// How each report status looks: pin color, the icon drawn on it, and its wording.
-({Color pin, Color icon, String label, PenguinTone tone}) reportStyle(
-  String status,
-) => switch (status) {
-  'CONFIRMED' => (
-    pin: PenguinColors.yellow,
-    icon: PenguinColors.black,
-    label: 'Confirmed',
-    tone: PenguinTone.success,
-  ),
-  'REJECTED' => (
-    pin: PenguinColors.charcoalHigh,
-    icon: PenguinColors.muted,
-    label: 'Not confirmed',
-    tone: PenguinTone.info,
-  ),
-  _ => (
-    pin: PenguinColors.orange,
-    icon: PenguinColors.black,
-    label: 'Checking',
-    tone: PenguinTone.warning,
-  ),
-};
+import 'package:penguin_shared/penguin_shared.dart';
 
 /// A tappable map pin for one report.
 Marker reportMarker(ReportSummary report, VoidCallback onTap) {
@@ -51,7 +26,7 @@ Marker reportMarker(ReportSummary report, VoidCallback onTap) {
             Positioned(
               top: 9,
               child: Icon(
-                Icons.construction_rounded,
+                style.symbol,
                 size: 15,
                 color: style.icon,
               ),
@@ -159,7 +134,7 @@ class _DetailRow extends StatelessWidget {
   }
 }
 
-/// A small key explaining the three pin colors.
+/// A small key explaining every pin a civilian can see on their map.
 class ReportPinLegend extends StatelessWidget {
   const ReportPinLegend({super.key});
 
@@ -177,21 +152,24 @@ class ReportPinLegend extends StatelessWidget {
         spacing: 14,
         runSpacing: 4,
         children: [
-          for (final status in ['PENDING', 'CONFIRMED', 'REJECTED'])
+          // Civilians see their own reports in every status, so the key lists them all
+          for (final style in reportStatuses.map(reportStyle))
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // The pin's symbol inside its color, since REJECTED and DISMISSED share a color
                 Container(
-                  width: 12,
-                  height: 12,
+                  width: 18,
+                  height: 18,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: reportStyle(status).pin,
+                    color: style.pin,
                     border: Border.all(color: PenguinColors.muted),
                   ),
+                  child: Icon(style.symbol, size: 12, color: style.icon),
                 ),
                 const SizedBox(width: 6),
-                Text(reportStyle(status).label, style: text),
+                Text(style.label, style: text),
               ],
             ),
         ],

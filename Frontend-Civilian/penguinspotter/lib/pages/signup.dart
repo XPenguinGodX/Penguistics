@@ -6,8 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
-import 'package:penguin/theme/penguin_theme.dart';
-import 'package:penguin/widgets/penguin_widgets.dart';
+import 'package:penguin_shared/penguin_shared.dart';
 
 class Signup extends StatefulWidget {
   const Signup({super.key});

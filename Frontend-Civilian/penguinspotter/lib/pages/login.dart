@@ -1,7 +1,7 @@
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:penguin/services/auth_session.dart';
-import 'package:penguin/widgets/penguin_widgets.dart';
+import 'package:penguin_shared/penguin_shared.dart';
 
 class Login extends StatefulWidget {
   const Login({super.key});

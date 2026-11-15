@@ -1,0 +1,21 @@
+name: penguin_shared
+description: "Theme, widgets, map setup, and report status styles shared by the civilian and city apps."
+# A local package: the apps depend on it with a path: dependency, so it is never published
+publish_to: 'none'
+version: 1.0.0
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_map: ^8.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

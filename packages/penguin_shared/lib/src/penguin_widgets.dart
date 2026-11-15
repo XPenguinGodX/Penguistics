@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:penguin/theme/penguin_theme.dart';
+
+import 'penguin_theme.dart';
 
 /// A small emperor penguin drawn with shapes, so the app needs no image assets.
 class PenguinLogo extends StatelessWidget {

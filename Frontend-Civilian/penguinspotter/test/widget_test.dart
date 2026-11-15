@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:penguin/pages/login.dart';
-import 'package:penguin/theme/penguin_theme.dart';
+import 'package:penguin_shared/penguin_shared.dart';
 
 void main() {
   testWidgets('Login renders under the Midnight theme', (tester) async {

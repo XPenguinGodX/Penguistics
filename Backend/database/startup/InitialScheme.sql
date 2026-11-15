@@ -90,3 +90,9 @@ CREATE TABLE IF NOT EXISTS city_staff (
 -- (lower(trim(...))) or Postgres can't use the index.
 CREATE INDEX IF NOT EXISTS reports_city_lookup_idx
     ON reports (lower(trim(state)), lower(trim(city)), status);
+
+-- v5: the city dismissed the report (a duplicate, not the city's job, ...). Separate from REJECTED,
+-- which the cleanup job deletes after 3 days; DISMISSED reports are kept.
+-- IF NOT EXISTS makes it safe to rerun. Nothing below may use 'DISMISSED': a new enum value
+-- can't be used in the same transaction that adds it, and this whole script is one transaction.
+ALTER TYPE status ADD VALUE IF NOT EXISTS 'DISMISSED';

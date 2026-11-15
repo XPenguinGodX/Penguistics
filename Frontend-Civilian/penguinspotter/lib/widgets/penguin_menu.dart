@@ -1,8 +1,7 @@
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:penguin/services/auth_session.dart';
-import 'package:penguin/theme/penguin_theme.dart';
-import 'package:penguin/widgets/penguin_widgets.dart';
+import 'package:penguin_shared/penguin_shared.dart';
 
 /// The hamburger menu: who is signed in, Edit Profile, and Log out.
 class PenguinMenu extends StatefulWidget {

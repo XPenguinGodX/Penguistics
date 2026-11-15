@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:penguin/theme/penguin_theme.dart';
-import 'package:penguin/widgets/penguin_map.dart';
+import 'package:penguin_shared/penguin_shared.dart';
+
+/// How far a REMOTE report's pin may be from the phone.
+/// Must match REMOTE_RADIUS_KM in Backend/scripts/process_report.py, which enforces it.
+/// Lives here, not in penguin_shared, because only civilians place remote reports.
+const double remoteRadiusKm = 12;
 
 /// Full-screen map for placing a REMOTE report's pin.
 /// The pin stays fixed in the middle of the screen and the map moves underneath it.

@@ -213,5 +213,25 @@ class CleanupReportsTests(unittest.TestCase):
         self.geocode_client.invoke.assert_not_called()
 
 
+class PurgeQueryTests(unittest.TestCase):
+    """Check purge_expired's SQL directly: the job above only sees a fake Report."""
+
+    def setUp(self):
+        self.cursor = Mock()
+        self.cursor.fetchall.return_value = []
+        connection = types.ModuleType("database.connection")
+        connection.get_db_connection = Mock(return_value=Mock(cursor=Mock(return_value=self.cursor)))
+        with patch.dict(sys.modules, {"database": types.ModuleType("database"),
+                                      "database.connection": connection}):
+            path = Path(__file__).resolve().parents[1] / "models" / "Reports.py"
+            self.Report = runpy.run_path(str(path))["Report"]
+
+    def test_dismissed_reports_are_never_purged(self):
+        self.Report.purge_expired(3)
+        sql = self.cursor.execute.call_args.args[0]
+        self.assertIn("status IN ('REJECTED', 'PENDING')", sql)
+        self.assertNotIn("DISMISSED", sql)
+
+
 if __name__ == "__main__":
     unittest.main()
