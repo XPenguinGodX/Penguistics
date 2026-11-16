@@ -1,90 +1,216 @@
-import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:penguin_shared/penguin_shared.dart';
-import 'package:penguincity/config.dart';
 import 'package:penguincity/services/auth_session.dart';
+import 'package:penguincity/services/city_reports.dart';
 
-/// Placeholder home page until the city map (#11) replaces it.
 class Home extends StatefulWidget {
-  const Home({super.key});
+  const Home({super.key, this.loadReports});
 
+  /// Supplies data without Cognito or AWS in widget tests.
+  final Future<CityReports> Function()? loadReports;
   @override
   State<Home> createState() => _HomeState();
 }
 
 class _HomeState extends State<Home> {
-  String? _username;
+  final _service = CityReportService();
+  final _selected = cityMapStatuses.toSet();
+  CityReports? _data;
+  bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _loadUser();
+    _refresh();
   }
 
-  Future<void> _loadUser() async {
+  @override
+  void dispose() {
+    _service.close();
+    super.dispose();
+  }
+
+  Future<CityReports> _loadReports() async =>
+      _service.load(await accessToken());
+
+  Future<void> _refresh() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final user = await Amplify.Auth.getCurrentUser();
-      if (mounted) setState(() => _username = user.username);
-    } on AuthException {
-      // The name is only a greeting; the page works without it
+      final data = await (widget.loadReports?.call() ?? _loadReports());
+      if (mounted) setState(() => _data = data);
+    } on CityReportsException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error =
+              'Could not load city reports. Check your connection and refresh.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
+    final data = _data;
+    final visible =
+        data?.reports.where((r) => _selected.contains(r.status)).toList() ??
+        <CityReport>[];
     return Scaffold(
       appBar: AppBar(
-        title: const Row(
-          children: [
-            PenguinLogo(size: 32),
-            SizedBox(width: 10),
-            PenguinWordmark(fontSize: 22),
-            SizedBox(width: 8),
-            Text('City'),
-          ],
-        ),
+        title: const Text('Penguistics City'),
         actions: [
+          TextButton.icon(
+            onPressed: _loading ? null : _refresh,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Refresh'),
+          ),
           TextButton.icon(
             onPressed: () => signOut(context),
             icon: const Icon(Icons.logout_rounded),
             label: const Text('Sign out'),
           ),
-          const SizedBox(width: 8),
         ],
       ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
             child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _username == null ? 'Welcome' : 'Welcome, $_username',
-                  style: text.headlineMedium,
+                  data == null ? 'City reports' : '${data.city}, ${data.state}',
+                  style: Theme.of(context).textTheme.headlineSmall,
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  'The report map for your city is on its way.',
-                  style: text.bodyLarge?.copyWith(color: PenguinColors.muted),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final status in cityMapStatuses)
+                      FilterChip(
+                        avatar: Icon(
+                          reportStyle(status).symbol,
+                          color: reportStyle(status).pin,
+                          size: 18,
+                        ),
+                        label: Text(switch (status) {
+                          'ACTIVE' => 'Active',
+                          'COMPLETED' => 'Completed',
+                          _ => 'Confirmed',
+                        }),
+                        tooltip: reportStyle(status).label,
+                        selected: _selected.contains(status),
+                        onSelected: (selected) => setState(() {
+                          if (selected) {
+                            _selected.add(status);
+                          } else {
+                            _selected.remove(status);
+                          }
+                        }),
+                      ),
+                  ],
                 ),
-                const SizedBox(height: 24),
-                // Every city API call needs PEN_API, so say so now instead of failing later
-                if (penApi.isEmpty)
-                  const StatusBanner(
-                    message: 'PEN_API isn\'t set. Run with --dart-define=PEN_API=<ApiBaseUrl>.',
-                    tone: PenguinTone.warning,
-                  )
-                else
-                  const StatusBanner(
-                    message: 'Connected to the Penguistics API.',
-                    tone: PenguinTone.success,
+                if (data != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '${visible.length} of ${data.reports.length} reports shown',
                   ),
+                ],
+                if (_error != null) ...[
+                  const SizedBox(height: 8),
+                  StatusBanner(
+                    message: data == null
+                        ? _error!
+                        : 'Showing previously loaded reports. $_error',
+                    tone: PenguinTone.warning,
+                  ),
+                ],
               ],
             ),
+          ),
+          if (_loading) const LinearProgressIndicator(),
+          Expanded(
+            child: data == null
+                ? Center(
+                    child: Text(
+                      _loading
+                          ? 'Loading city reports…'
+                          : 'Reports could not be loaded. Use Refresh to try again.',
+                    ),
+                  )
+                : data.reports.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No confirmed, active, or completed reports in your city yet.',
+                    ),
+                  )
+                : visible.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No reports match the selected filters. Select a status to show reports.',
+                    ),
+                  )
+                : FlutterMap(
+                    options: MapOptions(
+                      initialCenter: LatLng(
+                        data.reports.first.latitude,
+                        data.reports.first.longitude,
+                      ),
+                      initialZoom: 13,
+                      minZoom: penguinMinZoom,
+                      maxZoom: penguinMaxZoom,
+                    ),
+                    children: [
+                      penguinTileLayer(appId: 'com.penguistics.penguincity'),
+                      MarkerLayer(markers: visible.map(_marker).toList()),
+                      const SimpleAttributionWidget(
+                        source: Text('OpenStreetMap contributors'),
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Marker _marker(CityReport report) {
+    final style = reportStyle(report.status);
+    return Marker(
+      point: LatLng(report.latitude, report.longitude),
+      width: 44,
+      height: 46,
+      alignment: Alignment.topCenter,
+      child: Tooltip(
+        message:
+            '${report.title.isEmpty ? 'Road damage' : report.title} — ${style.label}',
+        child: Semantics(
+          label: '${style.label} report: ${report.title}',
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              const Icon(
+                Icons.location_on,
+                size: 46,
+                color: PenguinColors.black,
+              ),
+              Icon(Icons.location_on, size: 40, color: style.pin),
+              Positioned(
+                top: 9,
+                child: Icon(style.symbol, size: 15, color: style.icon),
+              ),
+            ],
           ),
         ),
       ),
