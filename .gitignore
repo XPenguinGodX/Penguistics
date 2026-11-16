@@ -16,3 +16,5 @@ venv/
 Backend/event.json
 Backend/out.json
 Backend/local-env.json
+
+out.json

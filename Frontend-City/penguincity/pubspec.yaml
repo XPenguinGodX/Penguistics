@@ -1,0 +1,31 @@
+name: penguincity
+description: "Penguistics for city staff: review and manage road damage reports in your city."
+# A private app, never published to pub.dev
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Same versions as the civilian app, so both talk to Cognito the same way
+  amplify_flutter: ^2.15.0
+  amplify_auth_cognito: ^2.15.1
+  http: ^1.2.0
+  # Some packages draw Cupertino icons; without this font they show as empty boxes
+  cupertino_icons: ^1.0.8
+  # Theme, widgets, map setup, and report pin styles shared with the civilian app
+  penguin_shared:
+    path: ../../packages/penguin_shared
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
