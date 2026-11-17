@@ -266,5 +266,68 @@ class CitySummariesQueryTests(unittest.TestCase):
         self.assertNotIn("imagepath", selected)
 
 
+class ReportPhotoTests(unittest.TestCase):
+    def setUp(self):
+        CityReportsTests.setUp(self)
+        self.Report.get_city_image.return_value = f'PenguinAlbum/Potholes/{REPORT_ID}.jpg'
+        self.s3 = Mock()
+        self.s3.generate_presigned_url.return_value = 'https://example.test/signed-photo'
+
+    def call_photo(self, report_id=REPORT_ID, **kwargs):
+        event = city_event(**kwargs)
+        event['routeKey'] = 'GET /city/reports/{id}/photo'
+        event['pathParameters'] = {'id': report_id}
+        config = types.ModuleType('botocore.config')
+        config.Config = Mock()
+        with patch.dict(sys.modules, {'boto3': Mock(client=Mock(return_value=self.s3)),
+                                     'botocore': types.ModuleType('botocore'), 'botocore.config': config}), \
+             patch.dict('os.environ', {'UPLOAD_BUCKET': 'test-bucket'}):
+            result = self.handler(event, None)
+        return result['statusCode'], json.loads(result['body'])
+
+    def test_photo_is_city_scoped_and_url_expires(self):
+        code, body = self.call_photo()
+        self.assertEqual(code, 200)
+        self.assertEqual(body['expiresIn'], 300)
+        self.Report.get_city_image.assert_called_once_with(REPORT_ID, 'Salt Lake City', 'Utah')
+        self.s3.generate_presigned_url.assert_called_once_with('get_object',
+            Params={'Bucket': 'test-bucket', 'Key': f'PenguinAlbum/Potholes/{REPORT_ID}.jpg'},
+            ExpiresIn=300, HttpMethod='GET')
+
+    def test_other_city_missing_and_unsafe_keys_never_get_signed(self):
+        for key in (None, '', 'PenguinThirdEyeMkI.onnx', 'PenguinAlbum/Potholes/../secret.jpg'):
+            self.Report.get_city_image.return_value = key
+            self.assertEqual(self.call_photo()[0], 404)
+        self.s3.generate_presigned_url.assert_not_called()
+
+    def test_invalid_id_and_non_staff_never_reach_photo_query(self):
+        self.assertEqual(self.call_photo(report_id='bad')[0], 404)
+        self.assertEqual(self.call_photo(groups=None)[0], 403)
+        self.assertEqual(self.call_photo(username=None)[0], 401)
+        self.CityStaff.get_by_username.return_value = None
+        self.assertEqual(self.call_photo()[0], 403)
+        self.Report.get_city_image.assert_not_called()
+
+    def test_database_and_signing_errors_are_recoverable(self):
+        self.Report.get_city_image.side_effect = RuntimeError('db down')
+        self.assertEqual(self.call_photo()[0], 503)
+        self.Report.get_city_image.side_effect = None
+        self.s3.generate_presigned_url.side_effect = RuntimeError('sign failed')
+        self.assertEqual(self.call_photo()[0], 503)
+
+
+class ReportPhotoQueryTests(unittest.TestCase):
+    def test_query_scopes_by_city_state_and_visible_statuses(self):
+        CitySummariesQueryTests.setUp(self)
+        self.cursor.fetchone.return_value = ('photo-key',)
+        self.assertEqual(self.Report.get_city_image(REPORT_ID, 'Example', 'UT'), 'photo-key')
+        sql, params = self.cursor.execute.call_args.args
+        self.assertIn('lower(trim(city)) = lower(trim(%s))', sql)
+        self.assertIn('lower(trim(state)) = lower(trim(%s))', sql)
+        self.assertIn('status = ANY(%s::status[])', sql)
+        self.assertEqual(params, (REPORT_ID, 'Example', 'UT', ['CONFIRMED', 'ACTIVE', 'COMPLETED', 'DISMISSED']))
+        self.cursor.close.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

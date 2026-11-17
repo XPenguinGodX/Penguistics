@@ -35,6 +35,9 @@ class _HomeState extends State<Home> {
   Future<CityReports> _loadReports() async =>
       _service.load(await accessToken());
 
+  Future<String> _photoUrl(String id) async =>
+      _service.photoUrl(id, await accessToken());
+
   Future<void> _changeStatus(CityReport report, String status) async {
     final updated = await _service.changeStatus(
       report.id,
@@ -195,6 +198,7 @@ class _HomeState extends State<Home> {
                 : CityReportMap(
                     reports: visible,
                     onChangeStatus: _changeStatus,
+                    loadPhoto: _photoUrl,
                   ),
           ),
         ],

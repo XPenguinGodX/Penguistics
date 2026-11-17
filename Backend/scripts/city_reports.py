@@ -6,6 +6,8 @@ PUT /city/reports/{id}/status   move one report through the workflow
 import base64
 import json
 import logging
+import os
+import re
 import uuid
 
 from models.CityStaff import CityStaff
@@ -142,11 +144,38 @@ def change_status(event, staff):
     })
 
 
+def report_photo(event, staff):
+    try:
+        report_id = str(uuid.UUID((event.get('pathParameters') or {}).get('id', '')))
+    except (ValueError, TypeError, AttributeError):
+        return response(404, {'message': 'No photo for that report in your city.'})
+    try:
+        key = Report.get_city_image(report_id, staff.city, staff.state)
+        if not isinstance(key, str) or not re.fullmatch(
+                r'PenguinAlbum/Potholes/[0-9a-f-]{36}\.(jpg|png|webp)', key):
+            return response(404, {'message': 'No photo for that report in your city.'})
+        bucket = os.environ.get('UPLOAD_BUCKET')
+        if not bucket:
+            return response(503, {'message': 'Report photos are not configured.'})
+        import boto3
+        from botocore.config import Config
+        s3 = boto3.client('s3', config=Config(signature_version='s3v4'))
+        url = s3.generate_presigned_url('get_object',
+            Params={'Bucket': bucket, 'Key': key}, ExpiresIn=300, HttpMethod='GET')
+        return response(200, {'url': url, 'expiresIn': 300})
+    except Exception:
+        logger.exception('Could not load photo for report %s', report_id)
+        return response(503, {'message': 'Report photos are temporarily unavailable.'})
+
+
 def handler(event, context):
     staff, error = calling_staff(event)
     if error:
         return error
     method = event.get('requestContext', {}).get('http', {}).get('method', 'GET')
+    if method == 'GET' and (event.get('routeKey', '').endswith('/photo') or
+                            event.get('rawPath', '').endswith('/photo')):
+        return report_photo(event, staff)
     if method == 'PUT':
         return change_status(event, staff)
     return list_reports(event, staff)

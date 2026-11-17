@@ -1,0 +1,10 @@
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": ["https://city.penguistics.com", "https://penguistics.com", "https://www.penguistics.com", "http://localhost:5000"],
+      "AllowedMethods": ["GET", "PUT", "HEAD"],
+      "AllowedHeaders": ["*"],
+      "MaxAgeSeconds": 300
+    }
+  ]
+}

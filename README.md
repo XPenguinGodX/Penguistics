@@ -1,4 +1,16 @@
 # Penguistics
+## Report photos and bucket CORS
+
+`GET /city/reports/{id}/photo` checks the CityStaff group and the caller's assigned
+city before returning a five-minute S3 GET URL. The bucket stays private.
+
+The photo bucket is external to the SAM stack. When deploying, review its existing
+CORS rules and merge the rules in `Backend/s3-cors.json`, preserving any other
+origins still in use. Applying a CORS configuration replaces the previous rules.
+The example allows both sites and localhost port 5000 for development; run Flutter
+with `--web-port=5000`. CORS permits browser access; it does not grant S3 permissions.
+No bucket changes are applied automatically by the application.
+
 A civic pipeline for civilians to report issues on the road, the system will validate the legitimacy of the report, Store it, and display it on the city worker cite with the optimal routes and course of action
 
 ## Creating city staff accounts

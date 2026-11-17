@@ -622,14 +622,27 @@ Resources:
           - !Ref PrivateSubnetB
       Environment:
         Variables:
+          UPLOAD_BUCKET: !Ref UploadBucketName
           DB_HOST: !GetAtt PostgresDatabase.Endpoint.Address
           DB_PORT: !GetAtt PostgresDatabase.Endpoint.Port
           DB_NAME: penguistics
           DB_SECRET_ARN: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
       Policies:
+        - Statement:
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub 'arn:${AWS::Partition}:s3:::${UploadBucketName}/PenguinAlbum/Potholes/*'
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !GetAtt PostgresDatabase.MasterUserSecret.SecretArn
       Events:
+        GetCityReportPhoto:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PenguisticsApi
+            Path: /city/reports/{id}/photo
+            Method: GET
+            Auth:
+              Authorizer: UploadUserAuthorizer
         ListCityReports:
           Type: HttpApi
           Properties:

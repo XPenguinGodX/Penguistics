@@ -154,5 +154,31 @@ class CityReportService {
     return report;
   }
 
+  Future<String> photoUrl(String id, String token) async {
+    final response = await _client
+        .get(
+          Uri.parse(
+            '${baseUrl.replaceFirst(RegExp(r'/+$'), '')}/city/reports/${Uri.encodeComponent(id)}/photo',
+          ),
+          headers: {'Authorization': 'Bearer $token'},
+        )
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200) {
+      throw CityReportsException(switch (response.statusCode) {
+        401 => 'Your session expired. Sign out and log in again.',
+        403 => 'This account cannot view report photos.',
+        404 => 'No photo is available for this report.',
+        _ => 'Could not load the photo. Please retry.',
+      });
+    }
+    final body = jsonDecode(response.body);
+    final url = body is Map<String, dynamic> ? body['url'] : null;
+    final uri = url is String ? Uri.tryParse(url) : null;
+    if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) {
+      throw const FormatException('Invalid photo URL.');
+    }
+    return url as String;
+  }
+
   void close() => _client.close();
 }

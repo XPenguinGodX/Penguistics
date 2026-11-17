@@ -314,6 +314,23 @@ class Report:
             cursor.close()
 
     @classmethod
+    def get_city_image(cls, report_id: str, city: str, state: str) -> str | None:
+        """Only return a photo key for a report visible to this city."""
+        cursor = get_db_connection().cursor()
+        try:
+            cursor.execute(
+                """SELECT imagepath FROM reports
+                WHERE id = %s AND lower(trim(city)) = lower(trim(%s))
+                  AND lower(trim(state)) = lower(trim(%s))
+                  AND status = ANY(%s::status[]);""",
+                (report_id, city, state, ['CONFIRMED', 'ACTIVE', 'COMPLETED', 'DISMISSED']),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            cursor.close()
+
+    @classmethod
     def get_city_summaries(cls, city: str, state: str, statuses: list[str], limit: int = 1000) -> list[dict]:
         """Fetch one city's reports with the given statuses, newest first, for the city map.
 
