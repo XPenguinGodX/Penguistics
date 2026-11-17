@@ -8,6 +8,60 @@ import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:penguin_shared/penguin_shared.dart';
 
+const _signupStates = [
+  'Alabama',
+  'Alaska',
+  'Arizona',
+  'Arkansas',
+  'California',
+  'Colorado',
+  'Connecticut',
+  'Delaware',
+  'District of Columbia',
+  'Florida',
+  'Georgia',
+  'Hawaii',
+  'Idaho',
+  'Illinois',
+  'Indiana',
+  'Iowa',
+  'Kansas',
+  'Kentucky',
+  'Louisiana',
+  'Maine',
+  'Maryland',
+  'Massachusetts',
+  'Michigan',
+  'Minnesota',
+  'Mississippi',
+  'Missouri',
+  'Montana',
+  'Nebraska',
+  'Nevada',
+  'New Hampshire',
+  'New Jersey',
+  'New Mexico',
+  'New York',
+  'North Carolina',
+  'North Dakota',
+  'Ohio',
+  'Oklahoma',
+  'Oregon',
+  'Pennsylvania',
+  'Rhode Island',
+  'South Carolina',
+  'South Dakota',
+  'Tennessee',
+  'Texas',
+  'Utah',
+  'Vermont',
+  'Virginia',
+  'Washington',
+  'West Virginia',
+  'Wisconsin',
+  'Wyoming',
+];
+
 class Signup extends StatefulWidget {
   const Signup({super.key});
 
@@ -38,7 +92,7 @@ class _SignupState extends State<Signup> {
   final TextEditingController username = TextEditingController();
   final TextEditingController password = TextEditingController();
   final TextEditingController email = TextEditingController();
-  final TextEditingController state = TextEditingController();
+  String? _selectedState;
   final TextEditingController city = TextEditingController();
 
   bool _isLoading = false;
@@ -50,7 +104,6 @@ class _SignupState extends State<Signup> {
     username.dispose();
     password.dispose();
     email.dispose();
-    state.dispose();
     city.dispose();
     super.dispose();
   }
@@ -216,7 +269,7 @@ class _SignupState extends State<Signup> {
                                   pluginOptions:
                                       CognitoConfirmSignUpPluginOptions(
                                         clientMetadata: {
-                                          'state': state.text.trim(),
+                                          'state': _selectedState!,
                                           'city': city.text.trim(),
                                         },
                                       ),
@@ -269,7 +322,7 @@ class _SignupState extends State<Signup> {
         username.text.trim().isEmpty ||
         password.text.isEmpty ||
         email.text.trim().isEmpty ||
-        state.text.trim().isEmpty ||
+        _selectedState == null ||
         city.text.trim().isEmpty) {
       showPenguinSnack(
         context,
@@ -432,9 +485,21 @@ class _SignupState extends State<Signup> {
               ),
             ),
             Expanded(
-              child: TextFormField(
-                controller: state,
-                textInputAction: TextInputAction.done,
+              child: DropdownButtonFormField<String>(
+                initialValue: _selectedState,
+                isExpanded: true,
+                menuMaxHeight: 300,
+                hint: const Text('Select state'),
+                items: [
+                  for (final name in _signupStates)
+                    DropdownMenuItem(
+                      value: name,
+                      child: Text(name, overflow: TextOverflow.ellipsis),
+                    ),
+                ],
+                onChanged: _isLoading
+                    ? null
+                    : (value) => setState(() => _selectedState = value),
                 decoration: const InputDecoration(labelText: "State"),
               ),
             ),

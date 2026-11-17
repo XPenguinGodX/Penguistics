@@ -158,96 +158,99 @@ class _HomeState extends State<Home> {
       ),
       body: LayoutBuilder(
         builder: (context, constraints) => Stack(
-        children: [
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: _currentLocation,
-              initialZoom: 13.0,
-              minZoom: penguinMinZoom,
-              maxZoom: penguinMaxZoom,
-            ),
-            children: [
-              penguinTileLayer(),
-              MarkerLayer(
-                markers: [
-                  for (final report in _myReports)
-                    reportMarker(
-                      report,
-                      () => showReportSheet(context, report),
-                    ),
-                  // Listed last so the user's own marker is drawn on top
-                  Marker(
-                    point: _currentLocation,
-                    width: 56,
-                    height: 56,
-                    alignment: Alignment.topCenter,
-                    child: const Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Icon(
-                          Icons.location_on,
-                          size: 52,
-                          color: PenguinColors.blue,
-                        ),
-                        Positioned(
-                          top: 9,
-                          child: CircleAvatar(
-                            radius: 11,
-                            backgroundColor: PenguinColors.yellow,
+          children: [
+            FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: _currentLocation,
+                initialZoom: 13.0,
+                minZoom: penguinMinZoom,
+                maxZoom: penguinMaxZoom,
+              ),
+              children: [
+                penguinTileLayer(),
+                MarkerLayer(
+                  markers: [
+                    // Draw location first so report pins stay visible and tappable above it.
+                    Marker(
+                      point: _currentLocation,
+                      width: 56,
+                      height: 56,
+                      alignment: Alignment.topCenter,
+                      child: const Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Icon(
+                            Icons.location_on,
+                            size: 52,
+                            color: PenguinColors.blue,
+                          ),
+                          Positioned(
+                            top: 9,
                             child: CircleAvatar(
-                              radius: 6,
-                              backgroundColor: PenguinColors.orange,
+                              radius: 11,
+                              backgroundColor: PenguinColors.yellow,
+                              child: CircleAvatar(
+                                radius: 6,
+                                backgroundColor: PenguinColors.orange,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              const SimpleAttributionWidget(
-                source: Text('OpenStreetMap contributors'),
-              ),
-            ],
-          ),
-          if (_myReports.isNotEmpty)
-            const Positioned(left: 12, bottom: 12, child: ReportPinLegend()),
-          Positioned(
-            left: _buttonPosition.dx,
-            top: _buttonPosition.dy,
-            child: GestureDetector(
-              onPanUpdate: (details) {
-                // Keep the whole button on screen, however far it's dragged
-                final next = _buttonPosition + details.delta;
-                setState(() {
-                  _buttonPosition = Offset(
-                    next.dx.clamp(
-                      0,
-                      max(0, constraints.maxWidth - _reportButtonSize.width),
-                    ),
-                    next.dy.clamp(
-                      0,
-                      max(0, constraints.maxHeight - _reportButtonSize.height),
-                    ),
-                  );
-                });
-              },
-              child: FloatingActionButton.extended(
-                heroTag: 'report_fab',
-                onPressed: _openReportForm,
-                shape: const StadiumBorder(
-                  side: BorderSide(color: PenguinColors.black, width: 2),
+                    for (final report in _myReports)
+                      reportMarker(
+                        report,
+                        () => showReportSheet(context, report),
+                      ),
+                  ],
                 ),
-                icon: const Icon(Icons.add_road_rounded),
-                label: const Text(
-                  'Report Damage',
-                  style: TextStyle(fontWeight: FontWeight.w800),
+                const SimpleAttributionWidget(
+                  source: Text('OpenStreetMap contributors'),
+                ),
+              ],
+            ),
+            if (_myReports.isNotEmpty)
+              const Positioned(left: 12, bottom: 12, child: ReportPinLegend()),
+            Positioned(
+              left: _buttonPosition.dx,
+              top: _buttonPosition.dy,
+              child: GestureDetector(
+                onPanUpdate: (details) {
+                  // Keep the whole button on screen, however far it's dragged
+                  final next = _buttonPosition + details.delta;
+                  setState(() {
+                    _buttonPosition = Offset(
+                      next.dx.clamp(
+                        0,
+                        max(0, constraints.maxWidth - _reportButtonSize.width),
+                      ),
+                      next.dy.clamp(
+                        0,
+                        max(
+                          0,
+                          constraints.maxHeight - _reportButtonSize.height,
+                        ),
+                      ),
+                    );
+                  });
+                },
+                child: FloatingActionButton.extended(
+                  heroTag: 'report_fab',
+                  onPressed: _openReportForm,
+                  shape: const StadiumBorder(
+                    side: BorderSide(color: PenguinColors.black, width: 2),
+                  ),
+                  icon: const Icon(Icons.add_road_rounded),
+                  label: const Text(
+                    'Report Damage',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
         ),
       ),
     );
