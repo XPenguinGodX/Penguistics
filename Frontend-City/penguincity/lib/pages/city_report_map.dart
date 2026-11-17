@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:penguin_shared/penguin_shared.dart';
 import 'package:penguincity/services/city_reports.dart';
@@ -52,7 +53,10 @@ class _CityReportMapState extends State<CityReportMap> {
     // Wait for the side panel to take its width before centering the pin.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-        _controller.move(LatLng(report.latitude, report.longitude), 16);
+        _controller.move(
+          LatLng(report.latitude, report.longitude),
+          penguinMaxZoom,
+        );
       }
     });
   }
@@ -88,49 +92,149 @@ class _CityReportMapState extends State<CityReportMap> {
                             penguinTileLayer(
                               appId: 'com.penguistics.penguincity',
                             ),
-                            MarkerLayer(
-                              markers: widget.reports.map((report) {
-                                final style = reportStyle(report.status);
-                                return Marker(
-                                  point: LatLng(
-                                    report.latitude,
-                                    report.longitude,
+                            MarkerClusterLayerWidget(
+                              key: ValueKey(
+                                Object.hash(
+                                  widget.reports
+                                      .map((r) => '${r.id}:${r.status}')
+                                      .join(','),
+                                  selected?.id,
+                                ),
+                              ),
+                              options: MarkerClusterLayerOptions(
+                                maxClusterRadius: 55,
+                                size: const Size(44, 44),
+                                maxZoom: penguinMaxZoom,
+                                disableClusteringAtZoom: 19,
+                                padding: const EdgeInsets.all(56),
+                                showPolygon: false,
+                                markerChildBehavior: true,
+                                builder: (context, markers) => Semantics(
+                                  button: true,
+                                  label:
+                                      '${markers.length} reports. Zoom in to explore.',
+                                  child: Container(
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: PenguinColors.blue,
+                                      border: Border.all(
+                                        color: PenguinColors.white,
+                                        width: 2,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      '${markers.length}',
+                                      style: const TextStyle(
+                                        color: PenguinColors.white,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
                                   ),
-                                  width: 44,
-                                  height: 46,
-                                  alignment: Alignment.topCenter,
-                                  child: Tooltip(
-                                    message: '${report.title} — ${style.label}',
-                                    child: Semantics(
-                                      button: true,
-                                      selected: selected?.id == report.id,
-                                      label: 'Open report: ${report.title}',
-                                      child: InkWell(
-                                        key: ValueKey('report-${report.id}'),
-                                        onTap: () => setState(
-                                          () => _selectedId = report.id,
+                                ),
+                                markers: widget.reports
+                                    .where((r) => r.id != selected?.id)
+                                    .map((report) {
+                                      final style = reportStyle(report.status);
+                                      return Marker(
+                                        point: LatLng(
+                                          report.latitude,
+                                          report.longitude,
                                         ),
+                                        width: 44,
+                                        height: 46,
+                                        alignment: Alignment.topCenter,
+                                        child: Tooltip(
+                                          message:
+                                              '${report.title} — ${style.label}',
+                                          child: Semantics(
+                                            button: true,
+                                            selected: selected?.id == report.id,
+                                            label:
+                                                'Open report: ${report.title}',
+                                            child: InkWell(
+                                              key: ValueKey(
+                                                'report-${report.id}',
+                                              ),
+                                              onTap: () => setState(
+                                                () => _selectedId = report.id,
+                                              ),
+                                              child: Stack(
+                                                alignment: Alignment.center,
+                                                children: [
+                                                  Icon(
+                                                    Icons.location_on,
+                                                    size: 46,
+                                                    color:
+                                                        selected?.id ==
+                                                            report.id
+                                                        ? PenguinColors.blue
+                                                        : PenguinColors.black,
+                                                  ),
+                                                  Icon(
+                                                    Icons.location_on,
+                                                    size: 40,
+                                                    color: style.pin,
+                                                  ),
+                                                  Positioned(
+                                                    top: 9,
+                                                    child: Icon(
+                                                      style.symbol,
+                                                      size: 15,
+                                                      color: style.icon,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    })
+                                    .toList(),
+                              ),
+                            ),
+                            if (selected != null)
+                              MarkerLayer(
+                                markers: [
+                                  Marker(
+                                    point: LatLng(
+                                      selected.latitude,
+                                      selected.longitude,
+                                    ),
+                                    width: 44,
+                                    height: 46,
+                                    alignment: Alignment.topCenter,
+                                    child: Tooltip(
+                                      message: selected.title,
+                                      child: InkWell(
+                                        key: ValueKey('report-${selected.id}'),
+                                        onTap: () => _selectReport(selected),
                                         child: Stack(
                                           alignment: Alignment.center,
                                           children: [
-                                            Icon(
+                                            const Icon(
                                               Icons.location_on,
                                               size: 46,
-                                              color: selected?.id == report.id
-                                                  ? PenguinColors.blue
-                                                  : PenguinColors.black,
+                                              color: PenguinColors.blue,
                                             ),
                                             Icon(
                                               Icons.location_on,
                                               size: 40,
-                                              color: style.pin,
+                                              color: reportStyle(
+                                                selected.status,
+                                              ).pin,
                                             ),
                                             Positioned(
                                               top: 9,
                                               child: Icon(
-                                                style.symbol,
+                                                reportStyle(
+                                                  selected.status,
+                                                ).symbol,
                                                 size: 15,
-                                                color: style.icon,
+                                                color: reportStyle(
+                                                  selected.status,
+                                                ).icon,
                                               ),
                                             ),
                                           ],
@@ -138,11 +242,20 @@ class _CityReportMapState extends State<CityReportMap> {
                                       ),
                                     ),
                                   ),
-                                );
-                              }).toList(),
-                            ),
-                            const SimpleAttributionWidget(
-                              source: Text('OpenStreetMap contributors'),
+                                ],
+                              ),
+                            const Align(
+                              alignment: Alignment.bottomRight,
+                              child: SizedBox(
+                                width: 180,
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    'OpenStreetMap contributors',
+                                    style: TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                              ),
                             ),
                           ],
                         ),

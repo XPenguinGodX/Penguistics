@@ -17,7 +17,8 @@ dependencies:
   amplify_auth_cognito: ^2.15.1
   http: ^1.2.0
   flutter_map: ^8.3.2
-  latlong2: ^0.10.1
+  flutter_map_marker_cluster: ^8.2.2
+  latlong2: ^0.9.1
   # Some packages draw Cupertino icons; without this font they show as empty boxes
   cupertino_icons: ^1.0.8
   # Theme, widgets, map setup, and report pin styles shared with the civilian app
