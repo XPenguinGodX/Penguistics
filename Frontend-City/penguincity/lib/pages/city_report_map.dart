@@ -5,6 +5,7 @@ import 'package:penguin_shared/penguin_shared.dart';
 import 'package:penguincity/services/city_reports.dart';
 import 'package:penguincity/pages/report_status_actions.dart';
 import 'package:penguincity/pages/report_photo.dart';
+import 'package:penguincity/pages/report_queue.dart';
 
 /// Fits every report, including cities whose reports span more than zoom 12.
 CameraFit? reportCameraFit(List<CityReport> reports) => reports.isEmpty
@@ -46,6 +47,16 @@ class _CityReportMapState extends State<CityReportMap> {
     if (fit != null) _controller.fitCamera(fit);
   }
 
+  void _selectReport(CityReport report) {
+    setState(() => _selectedId = report.id);
+    // Wait for the side panel to take its width before centering the pin.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _controller.move(LatLng(report.latitude, report.longitude), 16);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final selected = widget.reports
@@ -59,80 +70,100 @@ class _CityReportMapState extends State<CityReportMap> {
         return Row(
           children: [
             Expanded(
-              child: Stack(
+              child: Column(
                 children: [
-                  FlutterMap(
-                    mapController: _controller,
-                    options: MapOptions(
-                      initialCenter: const LatLng(39.5, -98.35),
-                      initialZoom: 4,
-                      initialCameraFit: reportCameraFit(widget.reports),
-                      minZoom: 3,
-                      maxZoom: penguinMaxZoom,
-                    ),
-                    children: [
-                      penguinTileLayer(appId: 'com.penguistics.penguincity'),
-                      MarkerLayer(
-                        markers: widget.reports.map((report) {
-                          final style = reportStyle(report.status);
-                          return Marker(
-                            point: LatLng(report.latitude, report.longitude),
-                            width: 44,
-                            height: 46,
-                            alignment: Alignment.topCenter,
-                            child: Tooltip(
-                              message: '${report.title} — ${style.label}',
-                              child: Semantics(
-                                button: true,
-                                selected: selected?.id == report.id,
-                                label: 'Open report: ${report.title}',
-                                child: InkWell(
-                                  key: ValueKey('report-${report.id}'),
-                                  onTap: () =>
-                                      setState(() => _selectedId = report.id),
-                                  child: Stack(
-                                    alignment: Alignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.location_on,
-                                        size: 46,
-                                        color: selected?.id == report.id
-                                            ? PenguinColors.blue
-                                            : PenguinColors.black,
-                                      ),
-                                      Icon(
-                                        Icons.location_on,
-                                        size: 40,
-                                        color: style.pin,
-                                      ),
-                                      Positioned(
-                                        top: 9,
-                                        child: Icon(
-                                          style.symbol,
-                                          size: 15,
-                                          color: style.icon,
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        FlutterMap(
+                          mapController: _controller,
+                          options: MapOptions(
+                            initialCenter: const LatLng(39.5, -98.35),
+                            initialZoom: 4,
+                            initialCameraFit: reportCameraFit(widget.reports),
+                            minZoom: 3,
+                            maxZoom: penguinMaxZoom,
+                          ),
+                          children: [
+                            penguinTileLayer(
+                              appId: 'com.penguistics.penguincity',
+                            ),
+                            MarkerLayer(
+                              markers: widget.reports.map((report) {
+                                final style = reportStyle(report.status);
+                                return Marker(
+                                  point: LatLng(
+                                    report.latitude,
+                                    report.longitude,
+                                  ),
+                                  width: 44,
+                                  height: 46,
+                                  alignment: Alignment.topCenter,
+                                  child: Tooltip(
+                                    message: '${report.title} — ${style.label}',
+                                    child: Semantics(
+                                      button: true,
+                                      selected: selected?.id == report.id,
+                                      label: 'Open report: ${report.title}',
+                                      child: InkWell(
+                                        key: ValueKey('report-${report.id}'),
+                                        onTap: () => setState(
+                                          () => _selectedId = report.id,
+                                        ),
+                                        child: Stack(
+                                          alignment: Alignment.center,
+                                          children: [
+                                            Icon(
+                                              Icons.location_on,
+                                              size: 46,
+                                              color: selected?.id == report.id
+                                                  ? PenguinColors.blue
+                                                  : PenguinColors.black,
+                                            ),
+                                            Icon(
+                                              Icons.location_on,
+                                              size: 40,
+                                              color: style.pin,
+                                            ),
+                                            Positioned(
+                                              top: 9,
+                                              child: Icon(
+                                                style.symbol,
+                                                size: 15,
+                                                color: style.icon,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                    ],
+                                    ),
                                   ),
-                                ),
-                              ),
+                                );
+                              }).toList(),
                             ),
-                          );
-                        }).toList(),
-                      ),
-                      const SimpleAttributionWidget(
-                        source: Text('OpenStreetMap contributors'),
-                      ),
-                    ],
+                            const SimpleAttributionWidget(
+                              source: Text('OpenStreetMap contributors'),
+                            ),
+                          ],
+                        ),
+                        Positioned(
+                          top: 12,
+                          left: 12,
+                          child: FilledButton.icon(
+                            onPressed: widget.reports.isEmpty ? null : _fit,
+                            icon: const Icon(Icons.fit_screen),
+                            label: const Text('Fit all reports'),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  Positioned(
-                    top: 12,
-                    left: 12,
-                    child: FilledButton.icon(
-                      onPressed: widget.reports.isEmpty ? null : _fit,
-                      icon: const Icon(Icons.fit_screen),
-                      label: const Text('Fit all reports'),
+                  SizedBox(
+                    height: constraints.maxHeight * .35,
+                    child: ReportQueue(
+                      reports: widget.reports,
+                      selectedId: selected?.id,
+                      onSelect: _selectReport,
                     ),
                   ),
                 ],
