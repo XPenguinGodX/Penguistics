@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:penguincity/pages/city_report_map.dart';
 import 'package:penguin_shared/penguin_shared.dart';
 import 'package:penguincity/services/auth_session.dart';
 import 'package:penguincity/services/city_reports.dart';
@@ -151,8 +150,16 @@ class _HomeState extends State<Home> {
                   )
                 : data.reports.isEmpty
                 ? const Center(
-                    child: Text(
-                      'No confirmed, active, or completed reports in your city yet.',
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: EdgeInsets.all(12),
+                          child: Text(
+                            'No confirmed, active, or completed reports in your city yet.',
+                          ),
+                        ),
+                        Expanded(child: CityReportMap(reports: [])),
+                      ],
                     ),
                   )
                 : visible.isEmpty
@@ -161,58 +168,9 @@ class _HomeState extends State<Home> {
                       'No reports match the selected filters. Select a status to show reports.',
                     ),
                   )
-                : FlutterMap(
-                    options: MapOptions(
-                      initialCenter: LatLng(
-                        data.reports.first.latitude,
-                        data.reports.first.longitude,
-                      ),
-                      initialZoom: 13,
-                      minZoom: penguinMinZoom,
-                      maxZoom: penguinMaxZoom,
-                    ),
-                    children: [
-                      penguinTileLayer(appId: 'com.penguistics.penguincity'),
-                      MarkerLayer(markers: visible.map(_marker).toList()),
-                      const SimpleAttributionWidget(
-                        source: Text('OpenStreetMap contributors'),
-                      ),
-                    ],
-                  ),
+                : CityReportMap(reports: visible),
           ),
         ],
-      ),
-    );
-  }
-
-  Marker _marker(CityReport report) {
-    final style = reportStyle(report.status);
-    return Marker(
-      point: LatLng(report.latitude, report.longitude),
-      width: 44,
-      height: 46,
-      alignment: Alignment.topCenter,
-      child: Tooltip(
-        message:
-            '${report.title.isEmpty ? 'Road damage' : report.title} — ${style.label}',
-        child: Semantics(
-          label: '${style.label} report: ${report.title}',
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              const Icon(
-                Icons.location_on,
-                size: 46,
-                color: PenguinColors.black,
-              ),
-              Icon(Icons.location_on, size: 40, color: style.pin),
-              Positioned(
-                top: 9,
-                child: Icon(style.symbol, size: 15, color: style.icon),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

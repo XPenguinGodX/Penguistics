@@ -10,10 +10,17 @@ class CityReport {
     this.title,
     this.status,
     this.latitude,
-    this.longitude,
-  );
+    this.longitude, {
+    this.description = '',
+    this.confidence,
+    this.createdAt,
+    this.locationSource = 'ONSITE',
+  });
   final String id, title, status;
   final double latitude, longitude;
+  final String description, locationSource;
+  final double? confidence;
+  final DateTime? createdAt;
 
   static CityReport? tryParse(Object? value) {
     if (value is! Map<String, dynamic>) return null;
@@ -40,6 +47,18 @@ class CityReport {
       status as String,
       lat.toDouble(),
       lon.toDouble(),
+      description: value['description'] is String
+          ? value['description'] as String
+          : '',
+      confidence: value['confidence'] is num
+          ? (value['confidence'] as num).toDouble()
+          : null,
+      createdAt: value['created_at'] is String
+          ? DateTime.tryParse(value['created_at'] as String)
+          : null,
+      locationSource: value['location_source'] == 'REMOTE'
+          ? 'REMOTE'
+          : 'ONSITE',
     );
   }
 }
