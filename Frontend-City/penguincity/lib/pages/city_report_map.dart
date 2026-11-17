@@ -3,6 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:penguin_shared/penguin_shared.dart';
 import 'package:penguincity/services/city_reports.dart';
+import 'package:penguincity/pages/report_status_actions.dart';
 
 /// Fits every report, including cities whose reports span more than zoom 12.
 CameraFit? reportCameraFit(List<CityReport> reports) => reports.isEmpty
@@ -16,8 +17,9 @@ CameraFit? reportCameraFit(List<CityReport> reports) => reports.isEmpty
       );
 
 class CityReportMap extends StatefulWidget {
-  const CityReportMap({super.key, required this.reports});
+  const CityReportMap({super.key, required this.reports, this.onChangeStatus});
   final List<CityReport> reports;
+  final Future<void> Function(CityReport, String)? onChangeStatus;
   @override
   State<CityReportMap> createState() => _CityReportMapState();
 }
@@ -134,6 +136,7 @@ class _CityReportMapState extends State<CityReportMap> {
                 width: panelWidth,
                 child: ReportDetailsPanel(
                   report: selected,
+                  onChangeStatus: widget.onChangeStatus,
                   onClose: () => setState(() => _selectedId = null),
                 ),
               ),
@@ -149,9 +152,11 @@ class ReportDetailsPanel extends StatelessWidget {
     super.key,
     required this.report,
     required this.onClose,
+    this.onChangeStatus,
   });
   final CityReport report;
   final VoidCallback onClose;
+  final Future<void> Function(CityReport, String)? onChangeStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -207,6 +212,14 @@ class ReportDetailsPanel extends StatelessWidget {
             SelectableText(
               'Coordinates: ${report.latitude.toStringAsFixed(5)}, ${report.longitude.toStringAsFixed(5)}',
             ),
+            if (onChangeStatus != null) ...[
+              const SizedBox(height: 20),
+              ReportStatusActions(
+                key: ValueKey(report.id),
+                report: report,
+                onChange: onChangeStatus!,
+              ),
+            ],
           ],
         ),
       ),

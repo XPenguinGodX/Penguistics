@@ -35,6 +35,30 @@ class _HomeState extends State<Home> {
   Future<CityReports> _loadReports() async =>
       _service.load(await accessToken());
 
+  Future<void> _changeStatus(CityReport report, String status) async {
+    final updated = await _service.changeStatus(
+      report.id,
+      status,
+      await accessToken(),
+    );
+    if (!mounted || _data == null) return;
+    setState(() {
+      final data = _data!;
+      _data = CityReports(data.city, data.state, [
+        for (final current in data.reports)
+          if (current.id != updated.id)
+            current
+          else if (updated.status != 'DISMISSED')
+            updated,
+      ]);
+    });
+    showPenguinSnack(
+      context,
+      status == 'DISMISSED' ? 'Report dismissed.' : 'Report status updated.',
+      tone: PenguinTone.success,
+    );
+  }
+
   Future<void> _refresh() async {
     setState(() {
       _loading = true;
@@ -168,7 +192,10 @@ class _HomeState extends State<Home> {
                       'No reports match the selected filters. Select a status to show reports.',
                     ),
                   )
-                : CityReportMap(reports: visible),
+                : CityReportMap(
+                    reports: visible,
+                    onChangeStatus: _changeStatus,
+                  ),
           ),
         ],
       ),

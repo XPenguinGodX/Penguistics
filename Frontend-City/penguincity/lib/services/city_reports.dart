@@ -22,7 +22,7 @@ class CityReport {
   final double? confidence;
   final DateTime? createdAt;
 
-  static CityReport? tryParse(Object? value) {
+  static CityReport? tryParse(Object? value, {bool allowDismissed = false}) {
     if (value is! Map<String, dynamic>) return null;
     final id = value['id'];
     final lat = value['lat'];
@@ -38,7 +38,8 @@ class CityReport {
         lat > 90 ||
         lon < -180 ||
         lon > 180 ||
-        !cityMapStatuses.contains(status)) {
+        !(cityMapStatuses.contains(status) ||
+            (allowDismissed && status == 'DISMISSED'))) {
       return null;
     }
     return CityReport(
@@ -109,8 +110,48 @@ class CityReportService {
     return CityReports(
       body['city'] as String,
       body['state'] as String,
-      (body['reports'] as List).map(CityReport.tryParse).nonNulls.toList(),
+      (body['reports'] as List)
+          .map((value) => CityReport.tryParse(value))
+          .nonNulls
+          .toList(),
     );
+  }
+
+  Future<CityReport> changeStatus(
+    String id,
+    String status,
+    String token,
+  ) async {
+    final response = await _client
+        .put(
+          Uri.parse(
+            '${baseUrl.replaceFirst(RegExp(r'/+$'), '')}/city/reports/${Uri.encodeComponent(id)}/status',
+          ),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'status': status}),
+        )
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200) {
+      throw CityReportsException(switch (response.statusCode) {
+        401 => 'Your session has expired. Sign out and log in again.',
+        403 => 'This account cannot change city reports.',
+        404 => 'This report is no longer available. Refresh the map.',
+        409 => 'This report has changed. Refresh the map before trying again.',
+        _ =>
+          'Could not update the report. Refresh to check its current status before retrying.',
+      });
+    }
+    final body = jsonDecode(response.body);
+    final report = body is Map<String, dynamic>
+        ? CityReport.tryParse(body['report'], allowDismissed: true)
+        : null;
+    if (report == null || report.id != id || report.status != status) {
+      throw const FormatException('Invalid status response. Refresh the map.');
+    }
+    return report;
   }
 
   void close() => _client.close();
