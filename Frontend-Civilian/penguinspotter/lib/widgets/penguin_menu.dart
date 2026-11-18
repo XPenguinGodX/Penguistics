@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:penguin/services/auth_session.dart';
 import 'package:penguin_shared/penguin_shared.dart';
 
-/// The hamburger menu: who is signed in, Edit Profile, and Log out.
+/// The hamburger menu: signed-in user, reports, profile, and logout.
 class PenguinMenu extends StatefulWidget {
   const PenguinMenu({super.key});
 
@@ -79,6 +79,15 @@ class _PenguinMenuState extends State<PenguinMenu> {
             ),
             Container(height: 4, color: PenguinColors.yellow),
             const SizedBox(height: 8),
+            ListTile(
+              leading: const Icon(Icons.assignment_rounded),
+              title: const Text('My Reports'),
+              subtitle: const Text('Browse your submitted reports'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, '/my-reports');
+              },
+            ),
             ListTile(
               leading: const Icon(Icons.edit_location_alt_rounded),
               title: const Text('Edit Profile'),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:penguin/pages/login.dart';
+import 'package:penguin/pages/my_reports.dart';
 import 'package:penguin/pages/home.dart';
 import 'package:penguin/pages/profile.dart';
 import 'package:penguin/pages/report.dart';
@@ -39,6 +40,7 @@ class Penguistics extends StatelessWidget {
         '/home': (context) => const AuthGate(child: Home()),
         '/report': (context) => const AuthGate(child: Report()),
         '/profile': (context) => const AuthGate(child: ProfilePage()),
+        '/my-reports': (context) => const AuthGate(child: MyReports()),
       },
     );
   }
