@@ -1,8 +1,14 @@
 {
   "CORSRules": [
     {
-      "AllowedOrigins": ["https://city.penguistics.com", "https://penguistics.com", "https://www.penguistics.com", "http://localhost:5000"],
-      "AllowedMethods": ["GET", "PUT", "HEAD"],
+      "AllowedOrigins": ["*"],
+      "AllowedMethods": ["PUT"],
+      "AllowedHeaders": ["Content-Type"],
+      "MaxAgeSeconds": 300
+    },
+    {
+      "AllowedOrigins": ["https://city.penguistics.com", "https://penguistics.com", "https://www.penguistics.com", "http://localhost:5000", "http://localhost:5001"],
+      "AllowedMethods": ["GET", "HEAD"],
       "AllowedHeaders": ["*"],
       "MaxAgeSeconds": 300
     }
