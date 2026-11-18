@@ -314,6 +314,39 @@ class Report:
             cursor.close()
 
     @classmethod
+    def get_city_stats(cls, city: str, state: str) -> dict:
+        """Aggregate all city-visible reports, independent of the map's row limit."""
+        cursor = get_db_connection().cursor()
+        try:
+            cursor.execute(
+                """WITH scoped AS (
+                    SELECT status, created_at, updated_at FROM reports
+                    WHERE lower(trim(city)) = lower(trim(%s))
+                      AND lower(trim(state)) = lower(trim(%s))
+                      AND status = ANY(%s::status[])
+                )
+                SELECT
+                  (SELECT json_object_agg(status, count) FROM
+                    (SELECT status, COUNT(*) AS count FROM scoped GROUP BY status) counts),
+                  (SELECT json_agg(daily ORDER BY day) FROM
+                    (SELECT (created_at AT TIME ZONE 'UTC')::date AS day, COUNT(*) AS count
+                     FROM scoped WHERE created_at >= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date - INTERVAL '29 days'
+                     GROUP BY day) daily),
+                  (SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at)))
+                   FROM scoped WHERE status = 'COMPLETED' AND updated_at >= created_at);""",
+                (city, state, ['CONFIRMED', 'ACTIVE', 'COMPLETED', 'DISMISSED']),
+            )
+            counts, daily, average = cursor.fetchone()
+            return {
+                'counts': {status: int((counts or {}).get(status, 0))
+                           for status in ['CONFIRMED', 'ACTIVE', 'COMPLETED', 'DISMISSED']},
+                'daily': daily or [],
+                'average_completion_seconds': float(average) if average is not None else None,
+            }
+        finally:
+            cursor.close()
+
+    @classmethod
     def get_city_image(cls, report_id: str, city: str, state: str) -> str | None:
         """Only return a photo key for a report visible to this city."""
         cursor = get_db_connection().cursor()

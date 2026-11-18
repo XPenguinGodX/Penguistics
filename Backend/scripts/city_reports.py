@@ -173,6 +173,14 @@ def handler(event, context):
     if error:
         return error
     method = event.get('requestContext', {}).get('http', {}).get('method', 'GET')
+    if method == 'GET' and (event.get('routeKey', '').endswith('/stats') or
+                            event.get('rawPath', '').endswith('/stats')):
+        try:
+            stats = Report.get_city_stats(staff.city, staff.state)
+            return response(200, {'city': staff.city, 'state': staff.state, **stats})
+        except Exception:
+            logger.exception('Could not load city statistics')
+            return response(503, {'message': 'City statistics are temporarily unavailable.'})
     if method == 'GET' and (event.get('routeKey', '').endswith('/photo') or
                             event.get('rawPath', '').endswith('/photo')):
         return report_photo(event, staff)

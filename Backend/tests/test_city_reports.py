@@ -329,5 +329,44 @@ class ReportPhotoQueryTests(unittest.TestCase):
         self.cursor.close.assert_called_once()
 
 
+class CityStatsTests(unittest.TestCase):
+    def setUp(self):
+        CityReportsTests.setUp(self)
+        self.Report.get_city_stats.return_value = {'counts': {'CONFIRMED': 2}, 'daily': [], 'average_completion_seconds': None}
+
+    def stats(self, **kwargs):
+        event = city_event(**kwargs)
+        event['routeKey'] = 'GET /city/stats'
+        return self.handler(event, None)
+
+    def test_city_is_from_staff_and_not_map_limits(self):
+        result = self.stats()
+        self.assertEqual(result['statusCode'], 200)
+        self.assertEqual(json.loads(result['body'])['counts']['CONFIRMED'], 2)
+        self.Report.get_city_stats.assert_called_once_with('Salt Lake City', 'Utah')
+        self.Report.get_city_summaries.assert_not_called()
+
+    def test_auth_and_failure(self):
+        self.assertEqual(self.stats(groups=None)['statusCode'], 403)
+        self.assertEqual(self.stats(username=None)['statusCode'], 401)
+        self.Report.get_city_stats.assert_not_called()
+        self.Report.get_city_stats.side_effect = RuntimeError('db down')
+        self.assertEqual(self.stats()['statusCode'], 503)
+
+    def test_aggregate_query_scopes_city_and_handles_empty_results(self):
+        CitySummariesQueryTests.setUp(self)
+        self.cursor.fetchone.return_value = (None, None, None)
+        data = self.Report.get_city_stats('Example', 'UT')
+        self.assertEqual(data['counts'], dict.fromkeys(['CONFIRMED', 'ACTIVE', 'COMPLETED', 'DISMISSED'], 0))
+        self.assertEqual(data['daily'], [])
+        self.assertIsNone(data['average_completion_seconds'])
+        sql, params = self.cursor.execute.call_args.args
+        self.assertIn('lower(trim(city)) = lower(trim(%s))', sql)
+        self.assertIn('lower(trim(state)) = lower(trim(%s))', sql)
+        self.assertEqual(params[:2], ('Example', 'UT'))
+        self.assertNotIn('LIMIT', sql)
+        self.cursor.close.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

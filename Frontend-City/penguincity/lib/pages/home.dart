@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:penguincity/pages/city_stats.dart';
 import 'package:penguincity/pages/city_report_map.dart';
 import 'package:penguin_shared/penguin_shared.dart';
 import 'package:penguincity/services/auth_session.dart';
@@ -94,6 +95,14 @@ class _HomeState extends State<Home> {
       appBar: AppBar(
         title: const Text('Penguistics City'),
         actions: [
+          IconButton(
+            tooltip: 'City statistics',
+            icon: const Icon(Icons.insights),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(builder: (_) => const CityStats()),
+            ),
+          ),
           TextButton.icon(
             onPressed: _loading ? null : _refresh,
             icon: const Icon(Icons.refresh),

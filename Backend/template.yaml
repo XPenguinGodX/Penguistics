@@ -643,6 +643,14 @@ Resources:
             Method: GET
             Auth:
               Authorizer: UploadUserAuthorizer
+        GetCityStats:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PenguisticsApi
+            Path: /city/stats
+            Method: GET
+            Auth:
+              Authorizer: UploadUserAuthorizer
         ListCityReports:
           Type: HttpApi
           Properties:
