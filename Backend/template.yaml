@@ -3,6 +3,10 @@ Transform: AWS::Serverless-2016-10-31
 Description: Penguistics city report and managment system
 
 Parameters:
+  RootDomainName:
+    Type: String
+    Default: penguistics.com
+    Description: Domain managed at Namecheap; deploy this stack in us-east-1 for certificate reuse by CloudFront
   UploadBucketName:
     Type: String
     Default: firstpenguinbucket
@@ -35,6 +39,34 @@ Globals:
       LogFormat: JSON
 
 Resources:
+  SharedDomainCertificate:
+    Type: AWS::CertificateManager::Certificate
+    # Hosting stacks will also use this certificate. Keep it if the API stack is removed.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      DomainName: !Ref RootDomainName
+      SubjectAlternativeNames:
+        - !Sub '*.${RootDomainName}'
+      ValidationMethod: DNS
+
+  ApiCustomDomain:
+    Type: AWS::ApiGatewayV2::DomainName
+    Properties:
+      DomainName: !Sub 'api.${RootDomainName}'
+      DomainNameConfigurations:
+        - CertificateArn: !Ref SharedDomainCertificate
+          EndpointType: REGIONAL
+          SecurityPolicy: TLS_1_2
+
+  ApiCustomDomainMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    DependsOn: PenguisticsApiApiGatewayDefaultStage
+    Properties:
+      ApiId: !Ref PenguisticsApi
+      DomainName: !Ref ApiCustomDomain
+      Stage: '$default'
+
   PenguisticsApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -747,24 +779,33 @@ Resources:
             Trigger: PostConfirmation
 
 Outputs:
+  SharedCertificateArn:
+    Description: Certificate in us-east-1 to reuse for the city and civilian CloudFront distributions
+    Value: !Ref SharedDomainCertificate
+  ApiDnsTarget:
+    Description: Namecheap CNAME value for host api (hostname only, no https prefix)
+    Value: !GetAtt ApiCustomDomain.RegionalDomainName
+  GeneratedApiBaseUrl:
+    Description: AWS-generated API URL; continues working during DNS setup and for diagnostics
+    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
   ApiBaseUrl:
     Description: Pass this base URL to Flutter with --dart-define=PEN_API=<url>
-    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+    Value: !Sub 'https://api.${RootDomainName}'
   UploadEndpoint:
     Description: Authenticated GET endpoint that returns a presigned S3 PUT URL
-    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/upload'
+    Value: !Sub 'https://api.${RootDomainName}/upload'
   ReportsEndpoint:
     Description: Authenticated POST /reports (create) and GET /reports/{id} (poll status)
-    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/reports'
+    Value: !Sub 'https://api.${RootDomainName}/reports'
   SignupCancellationEndpoint:
     Description: Pass this URL to Flutter with --dart-define=SIGNUP_CANCEL_URL=<url>
-    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/signup/cancel'
+    Value: !Sub 'https://api.${RootDomainName}/signup/cancel'
   HealthEndpoint:
     Description: URL for the GET /health endpoint
-    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/health'
+    Value: !Sub 'https://api.${RootDomainName}/health'
   CityReportsEndpoint:
     Description: Authenticated GET /city/reports and PUT /city/reports/{id}/status for CityStaff accounts
-    Value: !Sub 'https://${PenguisticsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/city/reports'
+    Value: !Sub 'https://api.${RootDomainName}/city/reports'
   CreateStaffFunctionName:
     Description: Invoke by hand to create a city staff account (see README "Creating city staff accounts")
     Value: !Ref CreateStaffFunction

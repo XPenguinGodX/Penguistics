@@ -15,6 +15,53 @@ No bucket changes are applied automatically by the application.
 
 A civic pipeline for civilians to report issues on the road, the system will validate the legitimacy of the report, Store it, and display it on the city worker cite with the optimal routes and course of action
 
+## Custom API domain and shared certificate (#24)
+
+Deploy `Backend/template.yaml` in **us-east-1**, using the existing `penguistics`
+stack and `RootDomainName=penguistics.com` (the default). It requests one DNS-validated
+certificate for `penguistics.com` and `*.penguistics.com` and maps
+`https://api.penguistics.com` to the existing API's default stage.
+
+The first deployment needs two manual DNS steps. Open Namecheap → Domain List →
+Manage `penguistics.com` → Advanced DNS before starting.
+
+1. Build and deploy from `Backend` using `sam build` and `sam deploy`. Review the
+   change set. While CloudFormation waits on `SharedDomainCertificate`, open ACM
+   in us-east-1 and find the pending certificate for `penguistics.com`.
+2. Copy its DNS validation CNAME record into Namecheap. For Host, use the record
+   name without the trailing `.penguistics.com`; for Value, use the full ACM
+   validation hostname. Choose Automatic TTL. The root and wildcard normally
+   share a validation record; add each distinct record ACM lists.
+3. Leave the validation record in DNS for automatic certificate renewal. Once
+   ACM reports Issued, CloudFormation can finish the domain and mapping.
+4. From the stack outputs, copy `ApiDnsTarget`. Add a second Namecheap CNAME:
+   Host `api`, Value the full `ApiDnsTarget` hostname, TTL Automatic. Do not use
+   an `https://` prefix or a path. Replace a conflicting record for `api` only;
+   preserve unrelated DNS records.
+5. After DNS propagates, check `https://api.penguistics.com/health` for the health
+   response. The `GeneratedApiBaseUrl` output continues to work during setup.
+
+Run the city app from `Frontend-City/penguincity`:
+
+```powershell
+flutter run -d edge --web-port=5001 --dart-define=PEN_API=https://api.penguistics.com
+```
+
+Run the civilian app from `Frontend-Civilian/penguinspotter`:
+
+```powershell
+flutter run -d edge --web-port=5000 --dart-define=PEN_API=https://api.penguistics.com --dart-define=SIGNUP_CANCEL_URL=https://api.penguistics.com/signup/cancel
+```
+
+Restart Flutter fully when changing defines. Keep using the generated endpoint
+until the custom domain's health check succeeds. Both endpoints reach the same API
+and use the same Cognito accounts. Reuse `SharedCertificateArn` when implementing
+the website hosting tickets. The certificate is retained on stack deletion because
+other hosting stacks may depend on it; inventory retained certificates before
+recreating the stack to avoid requesting duplicates. The API domain and mapping
+are recreated with the API stack, so update the Namecheap `api` target after a
+recreation. A permanent name does not preserve database data or Cognito accounts.
+
 ## Creating city staff accounts
 
 City staff can't sign up in an app. An admin creates each account by invoking `CreateStaffFunction`
