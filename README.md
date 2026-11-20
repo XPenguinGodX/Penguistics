@@ -62,6 +62,70 @@ recreating the stack to avoid requesting duplicates. The API domain and mapping
 are recreated with the API stack, so update the Namecheap `api` target after a
 recreation. A permanent name does not preserve database data or Cognito accounts.
 
+## City website hosting (#22)
+
+`Hosting/city.yaml` creates a separate `penguistics-city` CloudFormation stack:
+a private, encrypted S3 bucket and a CloudFront distribution at
+`https://city.penguistics.com`. Only this distribution can read the bucket.
+HTTP redirects to HTTPS, and 403/404 responses fall back to `index.html` for SPA
+navigation. The public website serves the login screen; Cognito and API city
+authorization still protect report data.
+
+Deploy in this order, after reviewing and approving the AWS changes:
+
+1. Deploy the backend's CORS update using the existing SAM build/deploy workflow
+   from `Backend`. Allowed origins are the city and civilian sites (including
+   `www`) and local development ports 5000 and 5001. Random Flutter ports are no
+   longer allowed. CORS is a browser rule, not a replacement for authentication.
+2. From the repository root, read the existing certificate and deploy hosting:
+
+   ```powershell
+   $certificateArn = aws cloudformation describe-stacks --stack-name penguistics --region us-east-1 --query "Stacks[0].Outputs[?OutputKey=='SharedCertificateArn'].OutputValue" --output text
+   aws cloudformation deploy --template-file Hosting/city.yaml --stack-name penguistics-city --region us-east-1 --parameter-overrides "CertificateArn=$certificateArn"
+   ```
+
+3. Read the hosting outputs:
+
+   ```powershell
+   aws cloudformation describe-stacks --stack-name penguistics-city --region us-east-1 --query "Stacks[0].Outputs" --output table
+   ```
+
+4. Build the city app from its directory, using the permanent API address:
+
+   ```powershell
+   cd Frontend-City/penguincity
+   flutter build web --release --dart-define=PEN_API=https://api.penguistics.com
+   ```
+
+5. From that same app directory, upload to the `CityBucketName` output and
+   invalidate the `CityDistributionId` output. Replace the placeholders with
+   the output values:
+
+   ```powershell
+   powershell -File ../../Hosting/publish-city.ps1 -BucketName <CityBucketName> -DistributionId <CityDistributionId>
+   ```
+
+   Check each command succeeds before continuing. Uploads keep previous assets
+   so an already-open browser can finish loading its version. `no-cache` asks
+   browsers and CloudFront to revalidate assets; invalidation clears existing
+   cached responses. The script uploads JavaScript modules (`.mjs`) with
+   `application/javascript` and WebAssembly (`.wasm`) with `application/wasm`.
+   This prevents browser MIME errors that can leave Amplify login loading.
+   Repeat the build and publishing script for subsequent releases.
+6. In Namecheap Advanced DNS, add CNAME Host `city`, Value the full `CityDnsTarget`
+   CloudFront hostname, TTL Automatic. Use no `https://` prefix or path. Preserve
+   the existing `api` and certificate-validation records.
+7. Once the distribution is deployed and DNS propagates, open
+   `https://city.penguistics.com` in Edge. Verify staff login, map, report details,
+   photo loading, and status actions. Refresh the page to confirm routing works.
+   Direct unauthenticated requests to the S3 bucket should return 403.
+
+The hosting bucket is retained on stack deletion to protect app artifacts; remove
+it separately if no longer needed. The distribution is deleted with the hosting
+stack. Deleting the backend still removes its API and accounts, so the website
+cannot function until those are restored. Use the existing shared certificate;
+do not request another one for the city site.
+
 ## Creating city staff accounts
 
 City staff can't sign up in an app. An admin creates each account by invoking `CreateStaffFunction`

@@ -73,7 +73,11 @@ Resources:
       StageName: '$default'
       CorsConfiguration:
         AllowOrigins:
-          - '*'
+          - https://city.penguistics.com
+          - https://penguistics.com
+          - https://www.penguistics.com
+          - http://localhost:5000
+          - http://localhost:5001
         AllowMethods:
           - POST
           - GET
