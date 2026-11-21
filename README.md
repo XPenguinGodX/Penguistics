@@ -126,6 +126,65 @@ stack. Deleting the backend still removes its API and accounts, so the website
 cannot function until those are restored. Use the existing shared certificate;
 do not request another one for the city site.
 
+## Civilian website hosting (#23)
+
+`Hosting/civilian.yaml` deploys the independent `penguistics-civilian` stack.
+It uses the same private S3, CloudFront Origin Access Control, HTTPS, and SPA
+fallback setup as the city app. One distribution serves both `penguistics.com`
+and `www.penguistics.com`, using the existing root/wildcard certificate in
+us-east-1. Both names serve the app directly; there is no redirect between them.
+Browser login sessions are separate for each origin.
+
+After approval, deploy from the repository root:
+
+```powershell
+$certificateArn = aws cloudformation describe-stacks --stack-name penguistics --region us-east-1 --query "Stacks[0].Outputs[?OutputKey=='SharedCertificateArn'].OutputValue" --output text
+aws cloudformation deploy --template-file Hosting/civilian.yaml --stack-name penguistics-civilian --region us-east-1 --parameter-overrides "CertificateArn=$certificateArn"
+aws cloudformation describe-stacks --stack-name penguistics-civilian --region us-east-1 --query "Stacks[0].Outputs" --output table
+```
+
+Build from `Frontend-Civilian/penguinspotter` with both required defines:
+
+```powershell
+flutter build web --release --dart-define=PEN_API=https://api.penguistics.com --dart-define=SIGNUP_CANCEL_URL=https://api.penguistics.com/signup/cancel
+```
+
+From that same app directory, substitute `CivilianBucketName` and
+`CivilianDistributionId` from the stack outputs:
+
+```powershell
+powershell -File ../../Hosting/publish-civilian.ps1 -BucketName <CivilianBucketName> -DistributionId <CivilianDistributionId>
+```
+
+The script performs S3 sync, explicitly uploads `.mjs` as JavaScript and `.wasm`
+as WebAssembly, and invalidates CloudFront. This includes the Amplify worker MIME
+fix discovered during city hosting. It preserves old assets and uses `no-cache`
+for revalidation. Repeat build and publish for subsequent releases.
+
+In Namecheap Advanced DNS, use the `CivilianDnsTarget` output as the Value for:
+
+| Type | Host | Value | TTL |
+| --- | --- | --- | --- |
+| ALIAS Record | @ | CivilianDnsTarget hostname | Automatic |
+| CNAME Record | www | CivilianDnsTarget hostname | Automatic |
+
+Use hostnames without `https://` or a path. Inspect existing root/www records and
+replace conflicting parking, redirect, A, AAAA, ALIAS, or CNAME records only;
+preserve MX/TXT email records and the `api`, `city`, and ACM validation records.
+If an existing root website is in use, coordinate its replacement before saving.
+
+Both HTTPS origins are already in API CORS and the photo bucket's read rules.
+After DNS propagation, test root and www in Edge, then test on a phone browser:
+sign up and email confirmation, login, location permission, choosing/taking a
+photo, report submission, My Reports, and page refresh. Verify uploads and
+sign-up cancellation reach the permanent API. Direct unsigned S3 access must
+remain blocked. Report status refresh on the civilian map is tracked separately
+in #28.
+
+As with city hosting, the artifact bucket is retained on stack deletion, while
+the distribution is deleted. Phone and native builds continue using the same
+application source; these resources host only the web build.
+
 ## Creating city staff accounts
 
 City staff can't sign up in an app. An admin creates each account by invoking `CreateStaffFunction`

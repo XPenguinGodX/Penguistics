@@ -1,11 +1,11 @@
 {
-    "name": "penguin",
-    "short_name": "penguin",
+    "name": "Penguistics",
+    "short_name": "Penguistics",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Report road damage and track repairs in your community.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
